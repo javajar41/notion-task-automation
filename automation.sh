@@ -283,7 +283,21 @@ execute_pending_tasks() {
     
     local confirmed_count=$(echo "$confirmed_tasks" | jq -r '.results | length')
     
-    # 2. 处理"未开始"的任务（新增：自动评估后执行）
+    # 2. 处理"测试中"的任务（阶段二：测试工程师测试）
+    local testing_tasks=$(curl -s -X POST \
+      "https://api.notion.com/v1/databases/$NOTION_DATABASE_ID/query" \
+      -H "Authorization: Bearer $NOTION_TOKEN" \
+      -H "Notion-Version: 2022-06-28" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "filter": {
+          "property": "完成状态", "status": {"equals": "测试中"}
+        }
+      }')
+    
+    local testing_count=$(echo "$testing_tasks" | jq -r '.results | length')
+    
+    # 3. 处理"未开始"的任务（自动评估后执行）
     local todo_tasks=$(curl -s -X POST \
       "https://api.notion.com/v1/databases/$NOTION_DATABASE_ID/query" \
       -H "Authorization: Bearer $NOTION_TOKEN" \
@@ -297,15 +311,33 @@ execute_pending_tasks() {
     
     local todo_count=$(echo "$todo_tasks" | jq -r '.results | length')
     
-    local total_count=$((confirmed_count + todo_count))
+    local total_count=$((confirmed_count + todo_count + testing_count))
     
     if [ "$total_count" -eq 0 ]; then
         info "没有需要执行的任务"
         return 0
     fi
     
-    log "发现 $total_count 个任务需要执行（确认迭代: $confirmed_count, 未开始: $todo_count）"
+    log "发现 $total_count 个任务（确认迭代: $confirmed_count, 测试中: $testing_count, 新任务: $todo_count）"
     log ""
+    
+    # 处理"测试中"的任务：通知测试工程师（阶段二）
+    if [ "$testing_count" -gt 0 ]; then
+        log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        log "🧪 测试中任务 - 等待测试工程师"
+        log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        
+        echo "$testing_tasks" | jq -c '.results[]' | while read -r task; do
+            local name=$(echo "$task" | jq -r '.properties."项目名称".title[0].plain_text // "未命名"')
+            local deploy_url=$(echo "$task" | jq -r '.properties."部署链接".url // ""')
+            
+            log "🧪 待测试: $name"
+            
+            # 触发测试工程师通知
+            trigger_test_engineer "$name" "$deploy_url"
+        done
+        log ""
+    fi
     
     # 处理"未开始"的任务：自动评估并改为"进行中"
     if [ "$todo_count" -gt 0 ]; then
@@ -587,6 +619,42 @@ $push_result
         
         return 0
     fi
+}
+
+# ============================================
+# 功能 4.5: 测试工程师通知（阶段二）
+# ============================================
+trigger_test_engineer() {
+    local task_name="$1"
+    local deploy_url="$2"
+    
+    log "  🧪 通知测试工程师: $task_name"
+    
+    # 生成测试检查清单
+    local test_checklist="测试检查清单：
+- [ ] 功能测试：所有功能正常运行
+- [ ] 界面测试：UI显示正确，无错位
+- [ ] 兼容性测试：多浏览器/设备兼容
+- [ ] 性能测试：加载速度正常
+- [ ] 边界测试：异常情况处理
+- [ ] 回归测试：未破坏已有功能"
+    
+    # 发送通知
+    send_notification "🧪 **测试任务待执行**
+
+📁 项目: $task_name
+🌐 测试地址: $deploy_url
+
+**请测试工程师进行测试：**
+
+$test_checklist
+
+✅ 测试通过后，请将状态改为"待验收"
+❌ 如有Bug，请将状态改为"修复中"并记录问题
+
+⏱️ 预计测试时间: 30分钟"
+    
+    log "  ✅ 测试工程师已通知"
 }
 
 # ============================================
