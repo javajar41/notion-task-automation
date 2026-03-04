@@ -552,23 +552,86 @@ $push_result
         
         log "  部署地址: $deploy_url"
         
-        # 更新 Notion 状态为已完成
-        log "  更新 Notion 状态..."
-        # 这里需要传入 page_id，简化处理
+        # 更新 Notion 状态为"待确认迭代"（V1完成，等待产品经理分析）
+        log "  更新 Notion 状态为: 待确认迭代"
+        curl -s -X PATCH \
+          "https://api.notion.com/v1/pages/$PAGE_ID" \
+          -H "Authorization: Bearer $NOTION_TOKEN" \
+          -H "Notion-Version: 2022-06-28" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "properties": {
+              "完成状态": {"status": {"name": "待确认迭代"}},
+              "版本": {"select": {"name": "V1"}},
+              "部署链接": {"url": "'"$deploy_url"'"}
+            }
+          }' > /dev/null
         
-        # 发送成功通知
-        send_notification "✅ **自动部署成功**
+        # 触发产品经理分析
+        log "  触发产品经理分析流程..."
+        trigger_product_manager_analysis "$task_name" "$deploy_url"
+        
+        # 发送成功通知（提示待确认迭代）
+        send_notification "✅ **V1 开发完成，等待迭代确认**
 
 📁 项目: $task_name
-✅ 状态: 已部署
+✅ V1 状态: 已部署
+🌐 访问地址: $deploy_url
 
-🌐 访问地址:
-$deploy_url
+⏸️ **下一步：产品经理分析**
+正在自动分析 V1 效果并生成 V1.1 迭代建议...
 
-代码已自动推送到 GitHub 并启用 GitHub Pages。"
+💡 **你的选项：**
+- 确认迭代 → 开发 V1.1
+- 结束项目 → 标记为已完成"
         
         return 0
     fi
+}
+
+# ============================================
+# 功能 4.6: 产品经理分析（V1 → V1.1）
+# ============================================
+trigger_product_manager_analysis() {
+    local task_name="$1"
+    local deploy_url="$2"
+    
+    log "  📊 产品经理分析: $task_name"
+    
+    # 创建分析任务文件
+    local analysis_file="$WORKSPACE/dev-projects/$(echo "$task_name" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')/.pm-analysis.json"
+    cat > "$analysis_file" << EOF
+{
+  "task_name": "$task_name",
+  "deploy_url": "$deploy_url",
+  "analysis_time": "$(date -Iseconds)",
+  "v1_status": "completed",
+  "next_step": "等待产品经理分析V1效果并生成V1.1 PRD",
+  "user_options": [
+    "确认迭代 - 开发V1.1",
+    "结束项目 - 标记为已完成"
+  ]
+}
+EOF
+    
+    log "  ✅ 产品经理分析任务已创建"
+    
+    # 发送通知给产品经理（用户）
+    send_notification "📊 **产品经理分析提醒**
+
+📁 项目: $task_name
+🌐 V1 演示: $deploy_url
+
+**请体验V1版本并决定：**
+
+1️⃣ **访问演示地址** 体验当前功能
+2️⃣ **评估V1效果** 确认是否满足需求
+3️⃣ **决定下一步：**
+   - 🚀 确认迭代 → 告诉我迭代需求，生成V1.1 PRD
+   - ✅ 结束项目 → V1已完成，无需继续迭代
+
+⏸️ 当前状态: 待确认迭代
+💡 等待你的决策..."
 }
 
 # ============================================
