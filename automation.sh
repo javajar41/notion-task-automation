@@ -333,6 +333,16 @@ execute_pending_tasks() {
             
             log "  优先级评估: $priority_score/100"
             
+            # 预估开发时间
+            local est_minutes=60
+            if [ -f "$SKILL_DIR/lib/dev-time-estimator.sh" ]; then
+                local est_result=$(source "$SKILL_DIR/lib/dev-time-estimator.sh" && estimate_dev_time "web" "simple" 2>/dev/null)
+                est_minutes=$(echo "$est_result" | jq -r '.estimated_minutes // 60')
+            fi
+            local est_hours=$(echo "scale=1; $est_minutes / 60" | bc)
+            local est_end_time=$(date -d "+${est_minutes} minutes" '+%H:%M')
+            log "  预估开发时间: ${est_hours}小时 (预计${est_end_time}完成)"
+            
             # 更新状态为"进行中"
             log "  更新状态为: 进行中"
             curl -s -X PATCH \
@@ -340,10 +350,10 @@ execute_pending_tasks() {
               -H "Authorization: Bearer $NOTION_TOKEN" \
               -H "Notion-Version: 2022-06-28" \
               -H "Content-Type: application/json" \
-              -d '{"properties": {"完成状态": {"status": {"name": "进行中"}}}}' > /dev/null
+              -d '{"properties": {"完成状态": {"status": {"name": "进行中"}}, "任务完成用时": {"rich_text": [{"text": {"content": "预估'${est_hours}'小时"}}]}}}' > /dev/null
             
             # 发送通知
-            send_notification "🚀 **新任务自动执行**\n\n📁 项目: $name\n🎯 优先级: $priority_score/100\n✅ 状态: 已自动开始开发"
+            send_notification "🚀 **新任务自动执行**\n\n📁 项目: $name\n🎯 优先级: $priority_score/100\n⏱️ 预估时间: ${est_hours}小时 (预计${est_end_time}完成)\n✅ 状态: 已自动开始开发"
             
             log "  ✅ 已自动开始开发"
             log ""
