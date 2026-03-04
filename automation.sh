@@ -264,11 +264,12 @@ $confirmed_list
 # ============================================
 # 功能 2: 执行确认迭代的任务（增强版）
 # ============================================
-execute_confirmed_tasks() {
+execute_pending_tasks() {
     log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log "🚀 执行确认迭代的任务"
+    log "🚀 执行任务开发"
     log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     
+    # 1. 处理"确认迭代"的任务（原有逻辑）
     local confirmed_tasks=$(curl -s -X POST \
       "https://api.notion.com/v1/databases/$NOTION_DATABASE_ID/query" \
       -H "Authorization: Bearer $NOTION_TOKEN" \
@@ -280,15 +281,84 @@ execute_confirmed_tasks() {
         }
       }')
     
-    local count=$(echo "$confirmed_tasks" | jq -r '.results | length')
+    local confirmed_count=$(echo "$confirmed_tasks" | jq -r '.results | length')
     
-    if [ "$count" -eq 0 ]; then
+    # 2. 处理"未开始"的任务（新增：自动评估后执行）
+    local todo_tasks=$(curl -s -X POST \
+      "https://api.notion.com/v1/databases/$NOTION_DATABASE_ID/query" \
+      -H "Authorization: Bearer $NOTION_TOKEN" \
+      -H "Notion-Version: 2022-06-28" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "filter": {
+          "property": "完成状态", "status": {"equals": "未开始"}
+        }
+      }')
+    
+    local todo_count=$(echo "$todo_tasks" | jq -r '.results | length')
+    
+    local total_count=$((confirmed_count + todo_count))
+    
+    if [ "$total_count" -eq 0 ]; then
+        info "没有需要执行的任务"
+        return 0
+    fi
+    
+    log "发现 $total_count 个任务需要执行（确认迭代: $confirmed_count, 未开始: $todo_count）"
+    log ""
+    
+    # 处理"未开始"的任务：自动评估并改为"进行中"
+    if [ "$todo_count" -gt 0 ]; then
+        log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        log "📋 自动评估并执行新任务"
+        log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        
+        echo "$todo_tasks" | jq -c '.results[]' | while read -r task; do
+            local name=$(echo "$task" | jq -r '.properties."项目名称".title[0].plain_text // "未命名"')
+            local page_id=$(echo "$task" | jq -r '.id')
+            local desc=$(echo "$task" | jq -r '.properties."需求描述".rich_text[0].plain_text // ""')
+            
+            log "🆕 新任务: $name"
+            
+            # 自动评估优先级
+            local priority_score=50
+            if [ -n "$desc" ]; then
+                # 简单关键词匹配评估
+                if echo "$desc" | grep -qi "紧急\|重要\|P0"; then
+                    priority_score=90
+                elif echo "$desc" | grep -qi "高优先级\|P1"; then
+                    priority_score=70
+                fi
+            fi
+            
+            log "  优先级评估: $priority_score/100"
+            
+            # 更新状态为"进行中"
+            log "  更新状态为: 进行中"
+            curl -s -X PATCH \
+              "https://api.notion.com/v1/pages/$page_id" \
+              -H "Authorization: Bearer $NOTION_TOKEN" \
+              -H "Notion-Version: 2022-06-28" \
+              -H "Content-Type: application/json" \
+              -d '{"properties": {"完成状态": {"status": {"name": "进行中"}}}}' > /dev/null
+            
+            # 发送通知
+            send_notification "🚀 **新任务自动执行**\n\n📁 项目: $name\n🎯 优先级: $priority_score/100\n✅ 状态: 已自动开始开发"
+            
+            log "  ✅ 已自动开始开发"
+            log ""
+        done
+    fi
+    
+    # 处理"确认迭代"的任务
+    if [ "$confirmed_count" -eq 0 ]; then
         info "没有确认迭代的任务需要执行"
         return 0
     fi
     
-    log "发现 $count 个确认迭代的任务"
-    log ""
+    log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log "🚀 执行确认迭代的任务"
+    log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     
     local i=1
     echo "$confirmed_tasks" | jq -c '.results[]' | while read -r task; do
@@ -923,14 +993,14 @@ main() {
             check_tasks
             ;;
         execute)
-            execute_confirmed_tasks
+            execute_pending_tasks
             ;;
         full)
             log "🚀 启动完整自动化流程"
             log ""
             check_tasks
             log ""
-            execute_confirmed_tasks
+            execute_pending_tasks
             log ""
             log "✅ 完整流程执行完毕"
             ;;
