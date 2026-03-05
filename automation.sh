@@ -154,6 +154,9 @@ check_tasks() {
     local pending=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "待确认迭代")] | length')
     local confirmed=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "确认迭代")] | length')
     local progress=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "进行中")] | length')
+    local testing=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "测试中")] | length')
+    local acceptance=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "待验收")] | length')
+    local fixing=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "修复中")] | length')
     local done=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "已完成")] | length')
     
     # 保存统计数据
@@ -169,6 +172,9 @@ check_tasks() {
     log "  ⏸️ 待确认: $pending 个"
     log "  ✅ 已确认: $confirmed 个"
     log "  🔄 进行中: $progress 个"
+    log "  🧪 测试中: $testing 个"
+    log "  👤 待验收: $acceptance 个"
+    log "  🔧 修复中: $fixing 个"
     log "  🎉 已完成: $done 个"
     log "─────────────────────────────────"
     log ""
@@ -184,6 +190,9 @@ check_tasks() {
 ⏸️ 待确认:    $pending 个  
 ✅ 已确认:    $confirmed 个
 🔄 进行中:    $progress 个
+🧪 测试中:    $testing 个
+👤 待验收:    $acceptance 个
+🔧 修复中:    $fixing 个
 🎉 已完成:    $done 个
 \`\`\`"
 
@@ -249,6 +258,39 @@ $confirmed_list
 🚀 系统将在下次检查时自动触发开发"
     fi
     
+    # 添加测试中的任务
+    if [ "$testing" -gt 0 ]; then
+        local testing_list=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "测试中")] | map("• " + .properties."项目名称".title[0].plain_text + " (" + (.properties."版本".select.name // "V1") + ")") | join("\n")')
+        report="$report
+
+🧪 **测试中 - 等待测试工程师：**
+$testing_list
+
+🔬 测试完成后将自动生成测试报告"
+    fi
+    
+    # 添加待验收的任务
+    if [ "$acceptance" -gt 0 ]; then
+        local acceptance_list=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "待验收")] | map("• " + .properties."项目名称".title[0].plain_text + " (" + (.properties."版本".select.name // "V1") + ")") | join("\n")')
+        report="$report
+
+👤 **待验收 - 等待产品验收：**
+$acceptance_list
+
+✅ 验收通过后即可标记为已完成"
+    fi
+    
+    # 添加修复中的任务
+    if [ "$fixing" -gt 0 ]; then
+        local fixing_list=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "修复中")] | map("• " + .properties."项目名称".title[0].plain_text) | join("\n")')
+        report="$report
+
+🔧 **修复中 - Bug修复：**
+$fixing_list
+
+🐛 修复完成后请更新状态"
+    fi
+    
     report="$report
 
 ---
@@ -297,7 +339,35 @@ execute_pending_tasks() {
     
     local testing_count=$(echo "$testing_tasks" | jq -r '.results | length')
     
-    # 3. 处理"未开始"的任务（自动评估后执行）
+    # 3. 处理"待验收"的任务（阶段三：产品验收）
+    local acceptance_tasks=$(curl -s -X POST \
+      "https://api.notion.com/v1/databases/$NOTION_DATABASE_ID/query" \
+      -H "Authorization: Bearer $NOTION_TOKEN" \
+      -H "Notion-Version: 2022-06-28" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "filter": {
+          "property": "完成状态", "status": {"equals": "待验收"}
+        }
+      }')
+    
+    local acceptance_count=$(echo "$acceptance_tasks" | jq -r '.results | length')
+    
+    # 4. 处理"修复中"的任务（Bug修复跟踪）
+    local fixing_tasks=$(curl -s -X POST \
+      "https://api.notion.com/v1/databases/$NOTION_DATABASE_ID/query" \
+      -H "Authorization: Bearer $NOTION_TOKEN" \
+      -H "Notion-Version: 2022-06-28" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "filter": {
+          "property": "完成状态", "status": {"equals": "修复中"}
+        }
+      }')
+    
+    local fixing_count=$(echo "$fixing_tasks" | jq -r '.results | length')
+    
+    # 5. 处理"未开始"的任务（自动评估后执行）
     local todo_tasks=$(curl -s -X POST \
       "https://api.notion.com/v1/databases/$NOTION_DATABASE_ID/query" \
       -H "Authorization: Bearer $NOTION_TOKEN" \
@@ -311,14 +381,14 @@ execute_pending_tasks() {
     
     local todo_count=$(echo "$todo_tasks" | jq -r '.results | length')
     
-    local total_count=$((confirmed_count + todo_count + testing_count))
+    local total_count=$((confirmed_count + todo_count + testing_count + acceptance_count + fixing_count))
     
     if [ "$total_count" -eq 0 ]; then
         info "没有需要执行的任务"
         return 0
     fi
     
-    log "发现 $total_count 个任务（确认迭代: $confirmed_count, 测试中: $testing_count, 新任务: $todo_count）"
+    log "发现 $total_count 个任务（确认迭代: $confirmed_count, 测试中: $testing_count, 待验收: $acceptance_count, 修复中: $fixing_count, 新任务: $todo_count）"
     log ""
     
     # 处理"测试中"的任务：通知测试工程师（阶段二）
@@ -330,11 +400,47 @@ execute_pending_tasks() {
         echo "$testing_tasks" | jq -c '.results[]' | while read -r task; do
             local name=$(echo "$task" | jq -r '.properties."项目名称".title[0].plain_text // "未命名"')
             local deploy_url=$(echo "$task" | jq -r '.properties."部署链接".url // ""')
+            local page_id=$(echo "$task" | jq -r '.id')
             
             log "🧪 待测试: $name"
             
             # 触发测试工程师通知
-            trigger_test_engineer "$name" "$deploy_url"
+            trigger_test_engineer "$name" "$deploy_url" "$page_id"
+        done
+        log ""
+    fi
+    
+    # 处理"待验收"的任务：通知产品经理验收（阶段三）
+    if [ "$acceptance_count" -gt 0 ]; then
+        log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        log "👤 待验收任务 - 等待产品验收"
+        log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        
+        echo "$acceptance_tasks" | jq -c '.results[]' | while read -r task; do
+            local name=$(echo "$task" | jq -r '.properties."项目名称".title[0].plain_text // "未命名"')
+            local deploy_url=$(echo "$task" | jq -r '.properties."部署链接".url // ""')
+            local page_id=$(echo "$task" | jq -r '.id')
+            
+            log "👤 待验收: $name"
+            
+            # 触发产品验收通知
+            trigger_product_acceptance "$name" "$deploy_url" "$page_id"
+        done
+        log ""
+    fi
+    
+    # 处理"修复中"的任务：跟踪Bug修复进度
+    if [ "$fixing_count" -gt 0 ]; then
+        log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        log "🔧 修复中任务 - Bug修复跟踪"
+        log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        
+        echo "$fixing_tasks" | jq -c '.results[]' | while read -r task; do
+            local name=$(echo "$task" | jq -r '.properties."项目名称".title[0].plain_text // "未命名"')
+            local bug_list=$(echo "$task" | jq -r '.properties."Bug列表".rich_text[0].plain_text // "未记录"')
+            
+            log "🔧 修复中: $name"
+            log "  Bug列表: $bug_list"
         done
         log ""
     fi
@@ -627,6 +733,7 @@ $push_result
 trigger_test_engineer() {
     local task_name="$1"
     local deploy_url="$2"
+    local page_id="$3"
     
     log "  🧪 通知测试工程师: $task_name"
     
@@ -638,6 +745,46 @@ trigger_test_engineer() {
 - [ ] 性能测试：加载速度正常
 - [ ] 边界测试：异常情况处理
 - [ ] 回归测试：未破坏已有功能"
+    
+    # 创建测试报告文件
+    local report_file="$SKILL_DIR/reports/test-$(echo "$task_name" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')-$(date +%Y%m%d).md"
+    mkdir -p "$SKILL_DIR/reports"
+    cat > "$report_file" << EOF
+# 🧪 测试报告 - $task_name
+
+**测试时间:** $(date '+%Y-%m-%d %H:%M:%S')  
+**测试地址:** $deploy_url  
+**Notion页面:** $page_id
+
+## 📋 测试检查清单
+
+$test_checklist
+
+## 📝 测试结果
+
+| 检查项 | 状态 | 备注 |
+|--------|------|------|
+| 功能测试 | ⬜ 待测 | |
+| 界面测试 | ⬜ 待测 | |
+| 兼容性测试 | ⬜ 待测 | |
+| 性能测试 | ⬜ 待测 | |
+| 边界测试 | ⬜ 待测 | |
+| 回归测试 | ⬜ 待测 | |
+
+## 🐛 Bug 列表
+
+暂无
+
+## ✅ 测试结论
+
+- [ ] 通过 - 可以验收
+- [ ] 失败 - 需要修复
+
+---
+*自动生成 by Notion Task Automation*
+EOF
+    
+    log "  📄 测试报告模板已创建: $report_file"
     
     # 发送通知
     send_notification "🧪 **测试任务待执行**
@@ -652,9 +799,180 @@ $test_checklist
 ✅ 测试通过后，请将状态改为"待验收"
 ❌ 如有Bug，请将状态改为"修复中"并记录问题
 
+📄 测试报告: $report_file
+
 ⏱️ 预计测试时间: 30分钟"
     
     log "  ✅ 测试工程师已通知"
+}
+
+# ============================================
+# 功能 4.5.1: 测试报告自动生成
+# ============================================
+generate_test_report() {
+    local task_name="$1"
+    local page_id="$2"
+    local test_result="${3:-pass}"
+    local bugs="${4:-}"
+    
+    log "  📊 生成测试报告: $task_name"
+    
+    local report_file="$SKILL_DIR/reports/test-$(echo "$task_name" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')-$(date +%Y%m%d)-final.md"
+    
+    local result_emoji="✅"
+    local result_text="通过"
+    if [[ "$test_result" == "fail" ]]; then
+        result_emoji="❌"
+        result_text="失败"
+    fi
+    
+    cat > "$report_file" << EOF
+# 📊 测试报告 - $task_name
+
+**测试时间:** $(date '+%Y-%m-%d %H:%M:%S')  
+**测试结果:** $result_emoji $result_text
+
+## 📝 测试摘要
+
+- **项目名称:** $task_name
+- **测试状态:** $result_text
+- **测试人员:** 自动化测试系统
+
+## 🐛 Bug 列表
+
+${bugs:-无}
+
+## ✅ 测试结论
+
+$(if [[ "$test_result" == "pass" ]]; then
+    echo "测试通过，可以进入验收环节。"
+else
+    echo "测试发现以下问题，需要修复后重新测试："
+    echo "$bugs"
+fi)
+
+---
+*自动生成 by Notion Task Automation v2.5*
+EOF
+    
+    log "  ✅ 测试报告已生成: $report_file"
+    
+    # 发送测试报告通知
+    if [[ "$test_result" == "pass" ]]; then
+        send_notification "✅ **测试通过 - $task_name**
+
+📊 测试报告已生成
+🎯 状态: 测试通过
+📄 报告文件: $report_file
+
+⏩ 下一步: 产品验收
+请产品经理进行最终验收。"
+    else
+        send_notification "❌ **测试失败 - $task_name**
+
+📊 测试报告已生成
+🎯 状态: 测试失败
+🐛 发现问题:
+$bugs
+
+📄 报告文件: $report_file
+
+🔧 已自动创建修复任务，请查看。"
+        
+        # 自动创建修复任务
+        create_bug_fix_task "$task_name" "$bugs" "$page_id"
+    fi
+    
+    echo "$report_file"
+}
+
+# ============================================
+# 功能 4.5.2: 测试失败处理流程
+# ============================================
+create_bug_fix_task() {
+    local task_name="$1"
+    local bugs="$2"
+    local original_page_id="$3"
+    
+    log "  🔧 创建Bug修复任务: $task_name"
+    
+    # 在Notion中创建子任务或更新原任务状态为"修复中"
+    curl -s -X PATCH \
+      "https://api.notion.com/v1/pages/$original_page_id" \
+      -H "Authorization: Bearer $NOTION_TOKEN" \
+      -H "Notion-Version: 2022-06-28" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "properties": {
+          "完成状态": {"status": {"name": "修复中"}},
+          "Bug列表": {"rich_text": [{"text": {"content": "'"$(echo "$bugs" | sed 's/"/\\"/g' | head -c 500)"'"}}]}
+        }
+      }' > /dev/null
+    
+    # 创建修复任务文件
+    local fix_task_file="$WORKSPACE/dev-projects/$(echo "$task_name" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')/.bug-fix-$(date +%Y%m%d%H%M%S).json"
+    cat > "$fix_task_file" << EOF
+{
+  "original_task": "$task_name",
+  "original_page_id": "$original_page_id",
+  "created_at": "$(date -Iseconds)",
+  "bugs": "$(echo "$bugs" | sed 's/"/\\"/g')",
+  "status": "pending",
+  "priority": "high",
+  "estimated_fix_time": "30分钟"
+}
+EOF
+    
+    log "  ✅ Bug修复任务已创建: $fix_task_file"
+}
+
+# ============================================
+# 功能 4.5.3: 产品验收环节
+# ============================================
+trigger_product_acceptance() {
+    local task_name="$1"
+    local deploy_url="$2"
+    local page_id="$3"
+    
+    log "  👤 触发产品验收: $task_name"
+    
+    # 更新状态为"待验收"
+    curl -s -X PATCH \
+      "https://api.notion.com/v1/pages/$page_id" \
+      -H "Authorization: Bearer $NOTION_TOKEN" \
+      -H "Notion-Version: 2022-06-28" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "properties": {
+          "完成状态": {"status": {"name": "待验收"}}
+        }
+      }' > /dev/null
+    
+    # 创建验收检查清单
+    local acceptance_checklist="验收检查清单：
+- [ ] 功能完整性：所有需求已实现
+- [ ] 用户体验：交互流畅，无卡顿
+- [ ] 视觉效果：符合设计规范
+- [ ] 性能表现：加载速度可接受
+- [ ] 代码质量：代码整洁，可维护
+- [ ] 文档完整：README和注释完善"
+    
+    # 发送验收通知
+    send_notification "👤 **产品验收待执行**
+
+📁 项目: $task_name
+🌐 演示地址: $deploy_url
+
+**请产品经理进行最终验收：**
+
+$acceptance_checklist
+
+✅ 验收通过 → 状态改为"已完成"
+❌ 需要调整 → 状态改为"确认迭代"并说明需求
+
+⏱️ 预计验收时间: 20分钟"
+    
+    log "  ✅ 产品验收通知已发送"
 }
 
 # ============================================
