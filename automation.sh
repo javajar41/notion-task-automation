@@ -154,7 +154,6 @@ check_tasks() {
     local pending=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "待确认迭代")] | length')
     local confirmed=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "确认迭代")] | length')
     local progress=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "进行中")] | length')
-    local pending_test=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "待测试")] | length')
     local testing=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "测试中")] | length')
     local acceptance=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "待验收")] | length')
     local fixing=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "修复中")] | length')
@@ -173,7 +172,6 @@ check_tasks() {
     log "  ⏸️ 待确认: $pending 个"
     log "  ✅ 已确认: $confirmed 个"
     log "  🔄 进行中: $progress 个"
-    log "  ⏳ 待测试: $pending_test 个"
     log "  🧪 测试中: $testing 个"
     log "  👤 待验收: $acceptance 个"
     log "  🔧 修复中: $fixing 个"
@@ -192,7 +190,6 @@ check_tasks() {
 ⏸️ 待确认:    $pending 个  
 ✅ 已确认:    $confirmed 个
 🔄 进行中:    $progress 个
-⏳ 待测试:    $pending_test 个
 🧪 测试中:    $testing 个
 👤 待验收:    $acceptance 个
 🔧 修复中:    $fixing 个
@@ -261,17 +258,6 @@ $confirmed_list
 🚀 系统将在下次检查时自动触发开发"
     fi
     
-    # 添加待测试的任务
-    if [ "$pending_test" -gt 0 ]; then
-        local pending_test_list=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "待测试")] | map("• " + .properties."项目名称".title[0].plain_text + " (" + (.properties."版本".select.name // "V1") + ")") | join("\n")')
-        report="$report
-
-⏳ **待测试 - 开发完成等待测试：**
-$pending_test_list
-
-🔬 测试工程师将开始测试"
-    fi
-    
     # 添加测试中的任务
     if [ "$testing" -gt 0 ]; then
         local testing_list=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "测试中")] | map("• " + .properties."项目名称".title[0].plain_text + " (" + (.properties."版本".select.name // "V1") + ")") | join("\n")')
@@ -280,7 +266,7 @@ $pending_test_list
 🧪 **测试中 - 测试工程师正在测试：**
 $testing_list
 
-🔬 测试完成后将自动生成测试报告"
+🔬 先写测试用例，再执行测试。测试完成后将自动生成测试报告"
     fi
     
     # 添加待验收的任务
@@ -339,21 +325,7 @@ execute_pending_tasks() {
     
     local confirmed_count=$(echo "$confirmed_tasks" | jq -r '.results | length')
     
-    # 2. 处理"待测试"的任务（开发完成，等待测试）
-    local pending_test_tasks=$(curl -s -X POST \
-      "https://api.notion.com/v1/databases/$NOTION_DATABASE_ID/query" \
-      -H "Authorization: Bearer $NOTION_TOKEN" \
-      -H "Notion-Version: 2022-06-28" \
-      -H "Content-Type: application/json" \
-      -d '{
-        "filter": {
-          "property": "完成状态", "status": {"equals": "待测试"}
-        }
-      }')
-    
-    local pending_test_count=$(echo "$pending_test_tasks" | jq -r '.results | length')
-    
-    # 3. 处理"测试中"的任务（阶段二：测试工程师正在测试）
+    # 2. 处理"测试中"的任务（阶段二：测试工程师正在测试）
     local testing_tasks=$(curl -s -X POST \
       "https://api.notion.com/v1/databases/$NOTION_DATABASE_ID/query" \
       -H "Authorization: Bearer $NOTION_TOKEN" \
@@ -409,43 +381,15 @@ execute_pending_tasks() {
     
     local todo_count=$(echo "$todo_tasks" | jq -r '.results | length')
     
-    local total_count=$((confirmed_count + todo_count + pending_test_count + testing_count + acceptance_count + fixing_count))
+    local total_count=$((confirmed_count + todo_count + testing_count + acceptance_count + fixing_count))
     
     if [ "$total_count" -eq 0 ]; then
         info "没有需要执行的任务"
         return 0
     fi
     
-    log "发现 $total_count 个任务（确认迭代: $confirmed_count, 待测试: $pending_test_count, 测试中: $testing_count, 待验收: $acceptance_count, 修复中: $fixing_count, 新任务: $todo_count）"
+    log "发现 $total_count 个任务（确认迭代: $confirmed_count, 测试中: $testing_count, 待验收: $acceptance_count, 修复中: $fixing_count, 新任务: $todo_count）"
     log ""
-    
-    # 处理"待测试"的任务：通知测试工程师开始测试
-    if [ "$pending_test_count" -gt 0 ]; then
-        log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        log "⏳ 待测试任务 - 通知测试工程师"
-        log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        
-        echo "$pending_test_tasks" | jq -c '.results[]' | while read -r task; do
-            local name=$(echo "$task" | jq -r '.properties."项目名称".title[0].plain_text // "未命名"')
-            local deploy_url=$(echo "$task" | jq -r '.properties."部署链接".url // ""')
-            local page_id=$(echo "$task" | jq -r '.id')
-            
-            log "⏳ 待测试: $name"
-            
-            # 更新状态为测试中并触发测试工程师
-            curl -s -X PATCH \
-              "https://api.notion.com/v1/pages/$page_id" \
-              -H "Authorization: Bearer $NOTION_TOKEN" \
-              -H "Notion-Version: 2022-06-28" \
-              -H "Content-Type: application/json" \
-              -d '{"properties": {"完成状态": {"status": {"name": "测试中"}}}}' > /dev/null
-            
-            # 触发测试工程师通知
-            trigger_test_engineer "$name" "$deploy_url" "$page_id"
-            log "  ✅ 状态已更新为: 测试中"
-        done
-        log ""
-    fi
     
     # 处理"测试中"的任务：显示测试进度
     if [ "$testing_count" -gt 0 ]; then
@@ -455,7 +399,7 @@ execute_pending_tasks() {
         
         echo "$testing_tasks" | jq -c '.results[]' | while read -r task; do
             local name=$(echo "$task" | jq -r '.properties."项目名称".title[0].plain_text // "未命名"')
-            log "🧪 测试中: $name - 等待测试完成"
+            log "🧪 测试中: $name - 等待测试完成（先写测试用例，再执行测试）"
         done
         log ""
     fi
@@ -494,71 +438,63 @@ execute_pending_tasks() {
         done
         log ""
     fi
-    
-    # 处理"未开始"的任务：自动评估并改为"进行中"
+# 处理"未开始"的任务：产品经理分析后直接开发（无需用户确认）
     if [ "$todo_count" -gt 0 ]; then
         log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        log "📋 自动评估并执行新任务"
+        log "🆕 处理新任务：产品经理分析 → 直接开发"
         log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         
         echo "$todo_tasks" | jq -c '.results[]' | while read -r task; do
             local name=$(echo "$task" | jq -r '.properties."项目名称".title[0].plain_text // "未命名"')
             local page_id=$(echo "$task" | jq -r '.id')
             local desc=$(echo "$task" | jq -r '.properties."需求描述".rich_text[0].plain_text // ""')
+            local git_url=$(echo "$task" | jq -r '.properties."Git链接".url // ""')
             
             log "🆕 新任务: $name"
             
-            # 自动评估优先级
-            local priority_score=50
-            if [ -n "$desc" ]; then
-                # 简单关键词匹配评估
-                if echo "$desc" | grep -qi "紧急\|重要\|P0"; then
-                    priority_score=90
-                elif echo "$desc" | grep -qi "高优先级\|P1"; then
-                    priority_score=70
-                fi
+            # 步骤1：产品经理分析
+            log "  步骤1: 产品经理分析需求..."
+            trigger_product_manager_analysis "$name" "" "$page_id"
+            
+            # 步骤2：自动推荐skill
+            log "  步骤2: 自动寻找并安装适合开发的 skill..."
+            if [ -f "$SKILL_DIR/lib/skill-recommender.sh" ]; then
+                local dev_skills=$(source "$SKILL_DIR/lib/skill-recommender.sh" && auto_recommend_and_install "dev" "$name" "开发阶段" 2>&1)
+                log "    推荐结果: $(echo "$dev_skills" | tail -1)"
             fi
             
-            log "  优先级评估: $priority_score/100"
-            
-            # 预估开发时间
-            local est_minutes=60
-            if [ -f "$SKILL_DIR/lib/dev-time-estimator.sh" ]; then
-                local est_result=$(source "$SKILL_DIR/lib/dev-time-estimator.sh" && estimate_dev_time "web" "simple" 2>/dev/null)
-                est_minutes=$(echo "$est_result" | jq -r '.estimated_minutes // 60')
-            fi
-            local est_hours=$(echo "scale=1; $est_minutes / 60" | bc)
-            local est_end_time=$(date -d "+${est_minutes} minutes" '+%H:%M')
-            log "  预估开发时间: ${est_hours}小时 (预计${est_end_time}完成)"
-            
-            # 更新状态为"进行中"
-            log "  更新状态为: 进行中"
+            # 步骤3：更新状态为进行中并开始开发
+            log "  步骤3: 更新状态为进行中，开始开发..."
             curl -s -X PATCH \
               "https://api.notion.com/v1/pages/$page_id" \
               -H "Authorization: Bearer $NOTION_TOKEN" \
               -H "Notion-Version: 2022-06-28" \
               -H "Content-Type: application/json" \
-              -d '{"properties": {"完成状态": {"status": {"name": "进行中"}}, "任务完成用时": {"rich_text": [{"text": {"content": "预估'${est_hours}'小时"}}]}}}' > /dev/null
+              -d '{"properties": {"完成状态": {"status": {"name": "进行中"}}}}' > /dev/null
+            
+            # 准备开发环境
+            prepare_dev_env "$name" "$git_url"
+            
+            # 触发开发
+            trigger_development "$name" "V1"
             
             # 发送通知
-            send_notification "🚀 **新任务自动执行**\n\n📁 项目: $name\n🎯 优先级: $priority_score/100\n⏱️ 预估时间: ${est_hours}小时 (预计${est_end_time}完成)\n✅ 状态: 已自动开始开发"
+            send_notification "🚀 **新任务自动开始开发**
+
+📁 项目: $name
+✅ 状态: 产品经理已分析，开发中
+
+🔧 **已完成：**
+1. 产品经理分析需求
+2. 自动安装开发 skills
+3. 开始开发
+
+⏱️ 开发完成后将自动进入测试阶段"
             
             log "  ✅ 已自动开始开发"
             log ""
         done
     fi
-    
-    # 处理"确认迭代"的任务
-    if [ "$confirmed_count" -eq 0 ]; then
-        info "没有确认迭代的任务需要执行"
-        return 0
-    fi
-    
-    log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log "🚀 执行确认迭代的任务"
-    log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    
-    local i=1
     echo "$confirmed_tasks" | jq -c '.results[]' | while read -r task; do
         local name=$(echo "$task" | jq -r '.properties."项目名称".title[0].plain_text // "未命名"')
         local version=$(echo "$task" | jq -r '.properties."版本".select.name // "V1.1"')
@@ -760,8 +696,8 @@ $push_result
           -H "Notion-Version: 2022-06-28")
         local current_version=$(echo "$current_task" | jq -r '.properties."版本".select.name // "V1"')
         
-        # 所有版本开发完成后都进入"待测试"状态
-        log "  当前版本 $current_version，更新状态为: 待测试"
+        # 所有版本开发完成后都进入"测试中"状态（测试工程师先写测试用例，再测试）
+        log "  当前版本 $current_version，更新状态为: 测试中"
         curl -s -X PATCH \
           "https://api.notion.com/v1/pages/$PAGE_ID" \
           -H "Authorization: Bearer $NOTION_TOKEN" \
@@ -769,25 +705,26 @@ $push_result
           -H "Content-Type: application/json" \
           -d '{
             "properties": {
-              "完成状态": {"status": {"name": "待测试"}},
+              "完成状态": {"status": {"name": "测试中"}},
               "部署链接": {"url": "'"$deploy_url"'"}
             }
           }' > /dev/null
         
-        # 触发测试工程师测试
+        # 触发测试工程师（先写测试用例，再测试）
         log "  触发测试工程师测试流程..."
         trigger_test_engineer "$task_name" "$deploy_url" "$PAGE_ID"
         
         # 发送成功通知
-        send_notification "✅ **$current_version 开发完成，进入待测试**
+        send_notification "✅ **$current_version 开发完成，进入测试阶段**
 
 📁 项目: $task_name
 📌 版本: $current_version
 ✅ 状态: 已部署，等待测试
 🌐 访问地址: $deploy_url
 
-🧪 **下一步：测试工程师测试**
-测试工程师将进行功能测试、兼容性测试等。
+🧪 **下一步：测试工程师**
+1. 先输出测试用例
+2. 再进行测试
 
 💡 **测试完成后：**
 - ✅ 测试通过 → 状态改为"待验收"
@@ -828,7 +765,58 @@ trigger_test_engineer() {
 - [ ] 边界测试：异常情况处理
 - [ ] 回归测试：未破坏已有功能"
     
-    # 创建测试报告文件
+    # 创建测试用例模板文件（测试工程师先写测试用例）
+    local test_case_file="$WORKSPACE/dev-projects/$(echo "$task_name" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')/docs/test-cases.md"
+    mkdir -p "$(dirname "$test_case_file")"
+    cat > "$test_case_file" << EOF
+# 🧪 测试用例 - $task_name
+
+**创建时间:** $(date '+%Y-%m-%d %H:%M:%S')  
+**测试地址:** $deploy_url  
+**Notion页面:** $page_id
+
+## 📋 测试用例列表
+
+### 功能测试
+| 用例ID | 测试项 | 测试步骤 | 预期结果 | 实际结果 | 状态 |
+|--------|--------|----------|----------|----------|------|
+| TC-001 | 功能1 | 步骤... | 结果... | | ⬜ |
+| TC-002 | 功能2 | 步骤... | 结果... | | ⬜ |
+
+### 界面测试
+| 用例ID | 测试项 | 测试步骤 | 预期结果 | 实际结果 | 状态 |
+|--------|--------|----------|----------|----------|------|
+| TC-011 | UI显示 | 步骤... | 结果... | | ⬜ |
+
+### 兼容性测试
+| 用例ID | 测试项 | 测试环境 | 预期结果 | 实际结果 | 状态 |
+|--------|--------|----------|----------|----------|------|
+| TC-021 | Chrome | 浏览器 | 正常显示 | | ⬜ |
+| TC-022 | Mobile | 手机端 | 响应式布局 | | ⬜ |
+
+### 性能测试
+| 用例ID | 测试项 | 测试方法 | 预期结果 | 实际结果 | 状态 |
+|--------|--------|----------|----------|----------|------|
+| TC-031 | 加载速度 | Lighthouse | <3秒 | | ⬜ |
+
+## 🐛 Bug 记录
+
+| BugID | 描述 | 严重程度 | 状态 |
+|-------|------|----------|------|
+| | | | |
+
+## ✅ 测试结论
+
+- [ ] 测试通过 - 可以验收
+- [ ] 测试不通过 - 需要修复
+
+---
+*请测试工程师先完善测试用例，然后执行测试*
+EOF
+    
+    log "  📄 测试用例模板已创建: $test_case_file"
+    
+    # 创建测试报告模板文件
     local report_file="$SKILL_DIR/reports/test-$(echo "$task_name" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')-$(date +%Y%m%d).md"
     mkdir -p "$SKILL_DIR/reports"
     cat > "$report_file" << EOF
@@ -838,24 +826,12 @@ trigger_test_engineer() {
 **测试地址:** $deploy_url  
 **Notion页面:** $page_id
 
-## 📋 测试检查清单
+## 📋 测试用例文件
+\`$test_case_file\`
 
-$test_checklist
+## 📝 测试结果汇总
 
-## 📝 测试结果
-
-| 检查项 | 状态 | 备注 |
-|--------|------|------|
-| 功能测试 | ⬜ 待测 | |
-| 界面测试 | ⬜ 待测 | |
-| 兼容性测试 | ⬜ 待测 | |
-| 性能测试 | ⬜ 待测 | |
-| 边界测试 | ⬜ 待测 | |
-| 回归测试 | ⬜ 待测 | |
-
-## 🐛 Bug 列表
-
-暂无
+待测试完成后填写...
 
 ## ✅ 测试结论
 
@@ -877,8 +853,13 @@ EOF
 🔧 **已自动安装测试相关 skills:**
 系统已根据任务类型自动推荐并安装了最优的测试 skills。
 
-**请测试工程师进行测试：**
+**请测试工程师按以下步骤进行：**
 
+**第1步：输出测试用例**
+📄 测试用例文件: \`$test_case_file\`
+请完善测试用例列表
+
+**第2步：执行测试**
 $test_checklist
 
 ✅ 测试通过后，请将状态改为"待验收"
@@ -1141,48 +1122,48 @@ trigger_product_manager_analysis() {
 *调研时间: $(date '+%Y-%m-%d')*
 RESEARCHEOF
     
-    # 创建 V1.1 PRD 模板文件
-    local prd_file="$WORKSPACE/dev-projects/$(echo "$task_name" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')/docs/PRD-v1.1.md"
-    cat > "$prd_file" << 'PRDEOF'
-# 📋 产品需求文档 - $task_name V1.1
+    # 创建/补充 PRD 文件（迭代PRD补充到原PRD）
+    local prd_file="$WORKSPACE/dev-projects/$(echo "$task_name" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')/docs/PRD.md"
+    mkdir -p "$(dirname "$prd_file")"
+    
+    # 检查是否已存在PRD文件
+    if [ -f "$prd_file" ]; then
+        # 追加迭代PRD到原文件
+        cat >> "$prd_file" << 'PRDEOF'
 
-## 🎯 版本目标
+---
+
+## 📋 V1.1 迭代需求（$(date '+%Y-%m-%d')）
+
+### 🎯 迭代目标
 基于 V1 的用户反馈和竞品调研，优化产品体验，增强核心功能。
 
-## 📊 V1 回顾
+### 📊 V1 回顾
 
-### 已实现功能
+**已实现功能**
 - 
 
-### 用户反馈
+**用户反馈**
 - 
 
-### 待改进点
+**待改进点**
 - 
 
-## 🚀 V1.1 需求列表
+### 🚀 V1.1 需求列表
 
-### 功能增强
+**功能增强**
 - [ ] 功能1: [描述]
 - [ ] 功能2: [描述]
 - [ ] 功能3: [描述]
 
-### 体验优化
+**体验优化**
 - [ ] 优化1: [描述]
 - [ ] 优化2: [描述]
 
-### Bug修复
+**Bug修复**
 - [ ] 修复1: [描述]
 
-## 🎨 设计规范
-
-### 视觉风格
-- 
-
-### 交互规范
-- 
-
-## 📅 开发计划
+### 📅 开发计划
 
 | 阶段 | 内容 | 预计时间 |
 |------|------|----------|
@@ -1190,15 +1171,67 @@ RESEARCHEOF
 | 测试 | 功能验证 | 30分钟 |
 | 验收 | 产品确认 | 20分钟 |
 
-## ✅ 验收标准
+### ✅ 验收标准
 
 - [ ] 所有需求功能正常
 - [ ] 无明显Bug
 - [ ] 符合设计规范
+PRDEOF
+    else
+        # 创建新的PRD文件（V1）
+        cat > "$prd_file" << 'PRDEOF'
+# 📋 产品需求文档 - $task_name
+
+## 🎯 V1.0 需求
+
+### 功能需求
+- [ ] 需求1: [描述]
+- [ ] 需求2: [描述]
+
+### 设计规范
+- 
+
+### 验收标准
+- [ ] 所有需求功能正常
+- [ ] 无明显Bug
 
 ---
-*文档创建时间: $(date '+%Y-%m-%d')*
+
+## 📋 V1.1 迭代需求（$(date '+%Y-%m-%d')）
+
+### 🎯 迭代目标
+基于 V1 的用户反馈和竞品调研，优化产品体验，增强核心功能。
+
+### 📊 V1 回顾
+
+**已实现功能**
+- 
+
+**用户反馈**
+- 
+
+**待改进点**
+- 
+
+### 🚀 V1.1 需求列表
+
+**功能增强**
+- [ ] 功能1: [描述]
+- [ ] 功能2: [描述]
+
+**体验优化**
+- [ ] 优化1: [描述]
+
+**Bug修复**
+- [ ] 修复1: [描述]
+
+### ✅ 验收标准
+
+- [ ] 所有需求功能正常
+- [ ] 无明显Bug
+- [ ] 符合设计规范
 PRDEOF
+    fi
     
     # 替换模板变量
     sed -i "s/\$task_name/$task_name/g" "$research_file" "$prd_file"
