@@ -747,6 +747,15 @@ auto_develop() {
         cd "$dev_dir" && git remote add origin "$remote_url" 2>/dev/null || true
     fi
     
+    # 【系统设计修复】项目初始化检查
+    init_project_checklist "$dev_dir" "$task_name"
+    
+    # 【系统设计修复】验证PRD内容
+    local prd_file="$dev_dir/docs/PRD.md"
+    if [ -f "$prd_file" ]; then
+        validate_prd_content "$prd_file"
+    fi
+    
     # 检查是否有未提交的更改
     local has_changes=$(cd "$dev_dir" && git status --porcelain 2>/dev/null | wc -l)
     if [ "$has_changes" -gt 0 ]; then
@@ -1849,3 +1858,150 @@ main() {
 
 # 运行主函数
 main "$@"
+
+# ============================================
+# 【系统设计修复】初始化项目检查
+# ============================================
+init_project_checklist() {
+    local dev_dir="$1"
+    local task_name="$2"
+    
+    log "  📋 执行项目初始化检查清单..."
+    
+    # 检查1: .gitignore
+    if [ ! -f "$dev_dir/.gitignore" ]; then
+        log "  创建.gitignore..."
+        cat > "$dev_dir/.gitignore" << 'GITIGNORE'
+# Dependencies
+node_modules/
+package-lock.json
+yarn.lock
+
+# Build outputs
+dist/
+build/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+GITIGNORE
+        git -C "$dev_dir" add .gitignore 2>/dev/null
+    fi
+    
+    # 检查2: README.md
+    if [ ! -f "$dev_dir/README.md" ]; then
+        log "  ⚠️ README.md 不存在"
+    fi
+    
+    # 检查3: 远程仓库
+    local has_remote=$(cd "$dev_dir" && git remote -v 2>/dev/null | wc -l)
+    if [ "$has_remote" -eq 0 ]; then
+        warn "  ⚠️ 未配置远程仓库(git remote)，部署时将无法推送"
+        warn "  请手动配置: git remote add origin https://github.com/username/repo.git"
+    else
+        log "  ✅ 远程仓库已配置"
+    fi
+    
+    log "  ✅ 项目初始化检查完成"
+}
+
+# ============================================
+# 【系统设计修复】规范化项目名称
+# ============================================
+normalize_project_name() {
+    local name="$1"
+    # 转换为小写，空格转连字符
+    local normalized=$(echo "$name" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
+    
+    # 检查是否包含中文
+    if [[ "$name" =~ [一-龥] ]]; then
+        # 尝试使用拼音转换（简化处理：保留英文和数字）
+        normalized=$(echo "$normalized" | sed 's/[^a-z0-9-]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//')
+        warn "  项目名称包含中文，已转换为: $normalized"
+    fi
+    
+    echo "$normalized"
+}
+
+# ============================================
+# 【系统设计修复】验证PRD内容
+# ============================================
+validate_prd_content() {
+    local prd_file="$1"
+    
+    if [ ! -f "$prd_file" ]; then
+        warn "  PRD文件不存在: $prd_file"
+        return 1
+    fi
+    
+    # 检查是否还是空模板
+    local empty_placeholders=$(grep -c "\[描述\]\|\[功能[0-9]*\]" "$prd_file" 2>/dev/null || echo "0")
+    
+    if [ "$empty_placeholders" -gt 3 ]; then
+        warn "  ⚠️ PRD文档仍有 $empty_placeholders 处空模板待填写"
+        warn "  请在开发完成后更新PRD: $prd_file"
+    else
+        log "  ✅ PRD文档内容已完善"
+    fi
+}
+
+# ============================================
+# 【系统设计修复】检查Notion状态有效性
+# ============================================
+validate_notion_status() {
+    local status="$1"
+    
+    # 检查状态是否在Notion数据库中
+    local valid_statuses=$(curl -s -X GET \
+      "https://api.notion.com/v1/databases/$NOTION_DATABASE_ID" \
+      -H "Authorization: Bearer $NOTION_TOKEN" \
+      -H "Notion-Version: 2022-06-28" | jq -r '.properties."完成状态".status.options[].name' 2>/dev/null)
+    
+    if echo "$valid_statuses" | grep -q "^${status}$"; then
+        return 0
+    else
+        error "  Notion数据库中不存在状态: $status"
+        error "  可用状态: $valid_statuses"
+        return 1
+    fi
+}
+
+# ============================================
+# 【修复】更新Notion的PRD链接
+# ============================================
+update_notion_prd_url() {
+    local page_id="$1"
+    local task_name="$2"
+    
+    # 构建GitHub上的PRD文件URL
+    local repo_name=$(echo "$task_name" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')
+    local prd_url="https://github.com/javajar41/${repo_name}/blob/main/docs/PRD.md"
+    
+    log "  更新Notion PRD链接: $prd_url"
+    
+    local update_result=$(curl -s -X PATCH \
+      "https://api.notion.com/v1/pages/$page_id" \
+      -H "Authorization: Bearer $NOTION_TOKEN" \
+      -H "Notion-Version: 2022-06-28" \
+      -H "Content-Type: application/json" \
+      -d "{
+        \"properties\": {
+          \"PRD\": {\"url\": \"$prd_url\"}
+        }
+      }")
+    
+    if echo "$update_result" | grep -q "error"; then
+        error "  PRD链接更新失败: $update_result"
+        return 1
+    else
+        log "  ✅ Notion PRD链接已更新"
+        return 0
+    fi
+}
