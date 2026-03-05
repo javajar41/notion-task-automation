@@ -117,7 +117,7 @@ save_state() {
     fi
     
     local temp=$(mktemp)
-    jq ".$key = \"$value\"" "$STATE_FILE" > "$temp" && mv "$temp" "$STATE_FILE"
+    jq --arg k "$key" --arg v "$value" '.[$k] = $v' "$STATE_FILE" > "$temp" && mv "$temp" "$STATE_FILE"
 }
 
 # 读取状态
@@ -126,7 +126,7 @@ load_state() {
     local default=${2:-""}
     
     if [ -f "$STATE_FILE" ]; then
-        jq -r ".$key // \"$default\"" "$STATE_FILE"
+        jq -r --arg k "$key" --arg d "$default" '.[$k] // $d' "$STATE_FILE"
     else
         echo "$default"
     fi
@@ -445,7 +445,8 @@ execute_pending_tasks() {
         done
         log ""
     fi
-# 处理"未开始"的任务：产品经理分析后直接开发（无需用户确认）
+    
+    # 处理"未开始"的任务：产品经理分析后直接开发（无需用户确认）
     if [ "$todo_count" -gt 0 ]; then
         log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         log "🆕 处理新任务：产品经理分析 → 直接开发"
@@ -472,12 +473,18 @@ execute_pending_tasks() {
             
             # 步骤3：更新状态为进行中并开始开发
             log "  步骤3: 更新状态为进行中，开始开发..."
-            curl -s -X PATCH \
+            local update_result=$(curl -s -X PATCH \
               "https://api.notion.com/v1/pages/$page_id" \
               -H "Authorization: Bearer $NOTION_TOKEN" \
               -H "Notion-Version: 2022-06-28" \
               -H "Content-Type: application/json" \
-              -d '{"properties": {"完成状态": {"status": {"name": "进行中"}}}}' > /dev/null
+              -d '{"properties": {"完成状态": {"status": {"name": "进行中"}}}}')
+            
+            if echo "$update_result" | grep -q "error"; then
+                error "  状态更新失败: $update_result"
+            else
+                log "  ✅ Notion状态已更新为: 进行中"
+            fi
             
             # 准备开发环境
             prepare_dev_env "$name" "$git_url"
