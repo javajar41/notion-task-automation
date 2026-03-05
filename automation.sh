@@ -374,7 +374,21 @@ execute_pending_tasks() {
     
     local fixing_count=$(echo "$fixing_tasks" | jq -r '.results | length')
     
-    # 5. 处理"未开始"的任务（自动评估后执行）
+    # 5. 处理"进行中"的任务（推进开发进度）⭐
+    local progress_tasks=$(curl -s -X POST \
+      "https://api.notion.com/v1/databases/$NOTION_DATABASE_ID/query" \
+      -H "Authorization: Bearer $NOTION_TOKEN" \
+      -H "Notion-Version: 2022-06-28" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "filter": {
+          "property": "完成状态", "status": {"equals": "进行中"}
+        }
+      }')
+    
+    local progress_count=$(echo "$progress_tasks" | jq -r '.results | length')
+    
+    # 6. 处理"未开始"的任务（自动评估后执行）
     local todo_tasks=$(curl -s -X POST \
       "https://api.notion.com/v1/databases/$NOTION_DATABASE_ID/query" \
       -H "Authorization: Bearer $NOTION_TOKEN" \
@@ -388,14 +402,14 @@ execute_pending_tasks() {
     
     local todo_count=$(echo "$todo_tasks" | jq -r '.results | length')
     
-    local total_count=$((confirmed_count + todo_count + testing_count + acceptance_count + fixing_count))
+    local total_count=$((confirmed_count + todo_count + testing_count + acceptance_count + fixing_count + progress_count))
     
     if [ "$total_count" -eq 0 ]; then
         info "没有需要执行的任务"
         return 0
     fi
     
-    log "发现 $total_count 个任务（确认迭代: $confirmed_count, 测试中: $testing_count, 待验收: $acceptance_count, 修复中: $fixing_count, 新任务: $todo_count）"
+    log "发现 $total_count 个任务（确认迭代: $confirmed_count, 进行中: $progress_count, 测试中: $testing_count, 待验收: $acceptance_count, 修复中: $fixing_count, 新任务: $todo_count）"
     log ""
     
     # 处理"测试中"的任务：显示测试进度
@@ -446,6 +460,53 @@ execute_pending_tasks() {
         log ""
     fi
     
+    # 处理"进行中"的任务：推进开发进度 ⭐
+    if [ "$progress_count" -gt 0 ]; then
+        log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        log "🔄 进行中任务 - 推进开发进度"
+        log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        
+        echo "$progress_tasks" | jq -c '.results[]' | while read -r task; do
+            local name=$(echo "$task" | jq -r '.properties."项目名称".title[0].plain_text // "未命名"')
+            local page_id=$(echo "$task" | jq -r '.id')
+            local git_url=$(echo "$task" | jq -r '.properties."Git链接".url // ""')
+            
+            log "🔄 开发中: $name"
+            
+            # 检查开发目录和文件
+            local dev_dir=$(load_state "dev_dir_$name" "")
+            local dev_task_file="$dev_dir/.dev-task.json"
+            
+            if [ -z "$dev_dir" ]; then
+                log "  ⚠️ 开发目录未记录，重新准备..."
+                prepare_dev_env "$name" "$git_url"
+                dev_dir=$(load_state "dev_dir_$name" "")
+            fi
+            
+            if [ -f "$dev_task_file" ]; then
+                log "  ✅ 开发任务文件存在"
+                # 检查开发进度
+                local task_status=$(cat "$dev_task_file" | jq -r '.status // "pending"')
+                log "  当前状态: $task_status"
+                
+                if [ "$task_status" = "completed" ]; then
+                    log "  ✅ 开发已完成，准备进入测试阶段..."
+                    # 这里可以添加自动部署逻辑
+                else
+                    log "  ⏳ 开发进行中，继续监控..."
+                fi
+            else
+                log "  ⚠️ 开发任务文件不存在，重新触发开发..."
+                # 重新触发开发流程
+                trigger_development "$name" "V1"
+                auto_develop "$name" "$git_url"
+                log "  ✅ 开发已重新触发"
+            fi
+            log ""
+        done
+        log ""
+    fi
+    
     # 处理"未开始"的任务：产品经理分析后直接开发（无需用户确认）
     if [ "$todo_count" -gt 0 ]; then
         log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -492,6 +553,10 @@ execute_pending_tasks() {
             # 触发开发
             trigger_development "$name" "V1"
             
+            # 执行自动开发（关键步骤）
+            log "  步骤4: 执行自动开发..."
+            auto_develop "$name" "$git_url"
+            
             # 发送通知
             send_notification "🚀 **新任务自动开始开发**
 
@@ -501,7 +566,8 @@ execute_pending_tasks() {
 🔧 **已完成：**
 1. 产品经理分析需求
 2. 自动安装开发 skills
-3. 开始开发
+3. 准备开发环境
+4. 触发自动开发
 
 ⏱️ 开发完成后将自动进入测试阶段"
             
