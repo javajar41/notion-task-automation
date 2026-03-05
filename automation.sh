@@ -690,38 +690,83 @@ $push_result
         
         log "  部署地址: $deploy_url"
         
-        # 更新 Notion 状态为"待确认迭代"（V1完成，等待产品经理分析）
-        log "  更新 Notion 状态为: 待确认迭代"
-        curl -s -X PATCH \
+        # 获取当前版本号（需要重新查询任务信息）
+        local current_task=$(curl -s -X GET \
           "https://api.notion.com/v1/pages/$PAGE_ID" \
           -H "Authorization: Bearer $NOTION_TOKEN" \
-          -H "Notion-Version: 2022-06-28" \
-          -H "Content-Type: application/json" \
-          -d '{
-            "properties": {
-              "完成状态": {"status": {"name": "待确认迭代"}},
-              "版本": {"select": {"name": "V1"}},
-              "部署链接": {"url": "'"$deploy_url"'"}
-            }
-          }' > /dev/null
+          -H "Notion-Version: 2022-06-28")
+        local current_version=$(echo "$current_task" | jq -r '.properties."版本".select.name // "V1"')
         
-        # 触发产品经理分析
-        log "  触发产品经理分析流程..."
-        trigger_product_manager_analysis "$task_name" "$deploy_url"
-        
-        # 发送成功通知（提示待确认迭代）
-        send_notification "✅ **V1 开发完成，等待迭代确认**
+        # 判断版本：V1 → 待确认迭代，V1.1+ → 测试中
+        if [[ "$current_version" == "V1" ]]; then
+            # V1 完成，进入待确认迭代状态
+            log "  当前版本 V1，更新状态为: 待确认迭代"
+            curl -s -X PATCH \
+              "https://api.notion.com/v1/pages/$PAGE_ID" \
+              -H "Authorization: Bearer $NOTION_TOKEN" \
+              -H "Notion-Version: 2022-06-28" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "properties": {
+                  "完成状态": {"status": {"name": "待确认迭代"}},
+                  "部署链接": {"url": "'"$deploy_url"'"}
+                }
+              }' > /dev/null
+            
+            # 触发产品经理分析
+            log "  触发产品经理分析流程..."
+            trigger_product_manager_analysis "$task_name" "$deploy_url" "$PAGE_ID"
+            
+            # 发送成功通知
+            send_notification "✅ **V1 开发完成，等待迭代确认**
 
 📁 项目: $task_name
 ✅ V1 状态: 已部署
 🌐 访问地址: $deploy_url
 
 ⏸️ **下一步：产品经理分析**
-正在自动分析 V1 效果并生成 V1.1 迭代建议...
+请体验 V1 版本并决定是否需要迭代：
 
 💡 **你的选项：**
-- 确认迭代 → 开发 V1.1
-- 结束项目 → 标记为已完成"
+- 🚀 确认迭代 → 在 Notion 中将状态改为"确认迭代"，开发 V1.1
+- ✅ 结束项目 → V1 已完成，无需继续迭代"
+            
+        else
+            # V1.1+ 完成，进入测试阶段
+            log "  当前版本 $current_version，更新状态为: 测试中"
+            curl -s -X PATCH \
+              "https://api.notion.com/v1/pages/$PAGE_ID" \
+              -H "Authorization: Bearer $NOTION_TOKEN" \
+              -H "Notion-Version: 2022-06-28" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "properties": {
+                  "完成状态": {"status": {"name": "测试中"}},
+                  "部署链接": {"url": "'"$deploy_url"'"}
+                }
+              }' > /dev/null
+            
+            # 触发测试工程师测试
+            log "  触发测试工程师测试流程..."
+            trigger_test_engineer "$task_name" "$deploy_url" "$PAGE_ID"
+            
+            # 发送成功通知
+            send_notification "✅ **$current_version 开发完成，进入测试阶段**
+
+📁 项目: $task_name
+📌 版本: $current_version
+✅ 状态: 已部署，等待测试
+🌐 访问地址: $deploy_url
+
+🧪 **下一步：测试工程师测试**
+测试工程师将进行功能测试、兼容性测试等。
+
+💡 **测试完成后：**
+- ✅ 测试通过 → 状态改为"待验收"
+- ❌ 发现Bug → 状态改为"修复中"
+
+📄 测试报告将自动生成。"
+        fi
         
         return 0
     fi
@@ -981,8 +1026,127 @@ $acceptance_checklist
 trigger_product_manager_analysis() {
     local task_name="$1"
     local deploy_url="$2"
+    local page_id="$3"
     
     log "  📊 产品经理分析: $task_name"
+    
+    # 创建竞品调研框架文件
+    local research_file="$WORKSPACE/dev-projects/$(echo "$task_name" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')/docs/competitor-research.md"
+    mkdir -p "$(dirname "$research_file")"
+    cat > "$research_file" << 'RESEARCHEOF'
+# 🔍 竞品调研框架 - $task_name
+
+## 📋 调研目标
+- 了解市场上类似产品的功能和设计
+- 分析竞品的优势和不足
+- 为 V1.1 迭代提供参考
+
+## 🏢 竞品列表
+
+### 竞品 1: [竞品名称]
+- **网址**: 
+- **核心功能**: 
+- **优点**: 
+- **缺点**: 
+- **可借鉴**: 
+
+### 竞品 2: [竞品名称]
+- **网址**: 
+- **核心功能**: 
+- **优点**: 
+- **缺点**: 
+- **可借鉴**: 
+
+### 竞品 3: [竞品名称]
+- **网址**: 
+- **核心功能**: 
+- **优点**: 
+- **缺点**: 
+- **可借鉴**: 
+
+## 💡 洞察总结
+
+### 市场趋势
+- 
+
+### 用户需求
+- 
+
+### 差异化机会
+- 
+
+## 📝 V1.1 迭代建议
+
+基于竞品调研，建议 V1.1 包含：
+1. 
+2. 
+3. 
+
+---
+*调研时间: $(date '+%Y-%m-%d')*
+RESEARCHEOF
+    
+    # 创建 V1.1 PRD 模板文件
+    local prd_file="$WORKSPACE/dev-projects/$(echo "$task_name" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')/docs/PRD-v1.1.md"
+    cat > "$prd_file" << 'PRDEOF'
+# 📋 产品需求文档 - $task_name V1.1
+
+## 🎯 版本目标
+基于 V1 的用户反馈和竞品调研，优化产品体验，增强核心功能。
+
+## 📊 V1 回顾
+
+### 已实现功能
+- 
+
+### 用户反馈
+- 
+
+### 待改进点
+- 
+
+## 🚀 V1.1 需求列表
+
+### 功能增强
+- [ ] 功能1: [描述]
+- [ ] 功能2: [描述]
+- [ ] 功能3: [描述]
+
+### 体验优化
+- [ ] 优化1: [描述]
+- [ ] 优化2: [描述]
+
+### Bug修复
+- [ ] 修复1: [描述]
+
+## 🎨 设计规范
+
+### 视觉风格
+- 
+
+### 交互规范
+- 
+
+## 📅 开发计划
+
+| 阶段 | 内容 | 预计时间 |
+|------|------|----------|
+| 开发 | 功能实现 | 2小时 |
+| 测试 | 功能验证 | 30分钟 |
+| 验收 | 产品确认 | 20分钟 |
+
+## ✅ 验收标准
+
+- [ ] 所有需求功能正常
+- [ ] 无明显Bug
+- [ ] 符合设计规范
+
+---
+*文档创建时间: $(date '+%Y-%m-%d')*
+PRDEOF
+    
+    # 替换模板变量
+    sed -i "s/\$task_name/$task_name/g" "$research_file" "$prd_file"
     
     # 创建分析任务文件
     local analysis_file="$WORKSPACE/dev-projects/$(echo "$task_name" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')/.pm-analysis.json"
@@ -990,17 +1154,23 @@ trigger_product_manager_analysis() {
 {
   "task_name": "$task_name",
   "deploy_url": "$deploy_url",
+  "page_id": "$page_id",
   "analysis_time": "$(date -Iseconds)",
   "v1_status": "completed",
-  "next_step": "等待产品经理分析V1效果并生成V1.1 PRD",
+  "research_file": "$research_file",
+  "prd_file": "$prd_file",
+  "next_step": "产品经理进行竞品调研并完善V1.1 PRD",
   "user_options": [
-    "确认迭代 - 开发V1.1",
-    "结束项目 - 标记为已完成"
+    "1. 进行竞品调研 - 参考 docs/competitor-research.md",
+    "2. 完善V1.1 PRD - 编辑 docs/PRD-v1.1.md",
+    "3. 确认迭代 - 在Notion中将状态改为'确认迭代'"
   ]
 }
 EOF
     
     log "  ✅ 产品经理分析任务已创建"
+    log "  📄 竞品调研模板: $research_file"
+    log "  📄 V1.1 PRD模板: $prd_file"
     
     # 发送通知给产品经理（用户）
     send_notification "📊 **产品经理分析提醒**
@@ -1008,16 +1178,21 @@ EOF
 📁 项目: $task_name
 🌐 V1 演示: $deploy_url
 
-**请体验V1版本并决定：**
+**请完成以下步骤：**
 
-1️⃣ **访问演示地址** 体验当前功能
-2️⃣ **评估V1效果** 确认是否满足需求
-3️⃣ **决定下一步：**
-   - 🚀 确认迭代 → 告诉我迭代需求，生成V1.1 PRD
-   - ✅ 结束项目 → V1已完成，无需继续迭代
+1️⃣ **体验 V1 版本** → 访问演示地址
+2️⃣ **竞品调研** → 参考 \`docs/competitor-research.md\`
+3️⃣ **完善 V1.1 PRD** → 编辑 \`docs/PRD-v1.1.md\`
+4️⃣ **确认迭代** → 在 Notion 中将状态改为"确认迭代"
+
+📋 **V1.1 PRD 应包含：**
+- 竞品调研洞察
+- V1 改进建议
+- 功能需求列表
+- 验收标准
 
 ⏸️ 当前状态: 待确认迭代
-💡 等待你的决策..."
+💡 完成 PRD 后请更新状态开始 V1.1 开发"
 }
 
 # ============================================
