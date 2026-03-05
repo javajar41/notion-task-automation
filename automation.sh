@@ -491,10 +491,22 @@ execute_pending_tasks() {
 
 ⏱️ 开发完成后将自动进入测试阶段"
             
-            log "  ✅ 已自动开始开发"
+                log "  ✅ 已自动开始开发"
             log ""
         done
     fi
+    
+    # 处理"确认迭代"的任务
+    if [ "$confirmed_count" -eq 0 ]; then
+        info "没有确认迭代的任务需要执行"
+        return 0
+    fi
+    
+    log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log "🚀 执行确认迭代的任务"
+    log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    local i=1
     echo "$confirmed_tasks" | jq -c '.results[]' | while read -r task; do
         local name=$(echo "$task" | jq -r '.properties."项目名称".title[0].plain_text // "未命名"')
         local version=$(echo "$task" | jq -r '.properties."版本".select.name // "V1.1"')

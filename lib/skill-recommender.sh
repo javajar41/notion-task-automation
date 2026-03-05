@@ -106,6 +106,9 @@ install_skill() {
             if [ -d "$WORKSPACE/.agents/skills/web-design-guidelines" ]; then
                 cp -r "$WORKSPACE/.agents/skills/web-design-guidelines" "$SKILL_DIR/"
                 echo "✅ web-design-guidelines 安装完成"
+            elif [ -d "/home/shiyongwang/.agents/skills/web-design-guidelines" ]; then
+                cp -r "/home/shiyongwang/.agents/skills/web-design-guidelines" "$SKILL_DIR/"
+                echo "✅ web-design-guidelines 安装完成"
             else
                 echo "⚠️ web-design-guidelines 源文件不存在"
             fi
@@ -114,6 +117,9 @@ install_skill() {
             if [ -d "$WORKSPACE/.agents/skills/performance" ]; then
                 cp -r "$WORKSPACE/.agents/skills/performance" "$SKILL_DIR/"
                 echo "✅ performance 安装完成"
+            elif [ -d "/home/shiyongwang/.agents/skills/performance" ]; then
+                cp -r "/home/shiyongwang/.agents/skills/performance" "$SKILL_DIR/"
+                echo "✅ performance 安装完成"
             else
                 echo "⚠️ performance 源文件不存在"
             fi
@@ -121,6 +127,9 @@ install_skill() {
         "accessibility-a11y")
             if [ -d "$WORKSPACE/.agents/skills/accessibility-a11y" ]; then
                 cp -r "$WORKSPACE/.agents/skills/accessibility-a11y" "$SKILL_DIR/"
+                echo "✅ accessibility-a11y 安装完成"
+            elif [ -d "/home/shiyongwang/.agents/skills/accessibility-a11y" ]; then
+                cp -r "/home/shiyongwang/.agents/skills/accessibility-a11y" "$SKILL_DIR/"
                 echo "✅ accessibility-a11y 安装完成"
             else
                 echo "⚠️ accessibility-a11y 源文件不存在"
