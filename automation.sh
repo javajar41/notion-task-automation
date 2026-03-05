@@ -140,6 +140,13 @@ check_tasks() {
     log "🔍 开始检查 Notion 任务"
     log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     
+    # 检查是否有最近变更的任务（状态变更立即响应）
+    if [ -f "$SKILL_DIR/lib/notion-change-detector.sh" ]; then
+        log "📡 检查最近状态变更..."
+        source "$SKILL_DIR/lib/notion-change-detector.sh" 2>/dev/null
+        log ""
+    fi
+    
     local all_data=$(curl -s -X POST \
       "https://api.notion.com/v1/databases/$NOTION_DATABASE_ID/query" \
       -H "Authorization: Bearer $NOTION_TOKEN" \
