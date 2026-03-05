@@ -569,8 +569,18 @@ execute_pending_tasks() {
         log "任务 $i/$count: $name $version"
         log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         
+        # 【环节2】自动推荐并安装最优 skill（研发工程师阶段）
+        log "🔍 步骤 1/6: 自动寻找并安装适合开发的 skill..."
+        if [ -f "$SKILL_DIR/lib/skill-recommender.sh" ]; then
+            local dev_skills=$(source "$SKILL_DIR/lib/skill-recommender.sh" && auto_recommend_and_install "dev" "$name" "开发阶段" 2>&1)
+            log "  ✅ 研发阶段 skill 推荐完成"
+            log "  推荐结果: $(echo "$dev_skills" | tail -1)"
+        else
+            log "  ⚠️ skill 推荐器未找到，跳过推荐"
+        fi
+        
         # 更新状态为进行中
-        log "📋 步骤 1/5: 更新 Notion 状态为"进行中"..."
+        log "📋 步骤 2/6: 更新 Notion 状态为"进行中"..."
         curl -s -X PATCH \
           "https://api.notion.com/v1/pages/$page_id" \
           -H "Authorization: Bearer $NOTION_TOKEN" \
@@ -584,20 +594,23 @@ execute_pending_tasks() {
 
 📁 项目: $name
 📌 版本: $version
-📊 进度: 1/5 - 准备开发环境
+📊 进度: 2/6 - 准备开发环境
+
+🔧 **已自动安装开发相关 skills:**
+系统已根据任务类型自动推荐并安装了最优的开发 skills（如 superpowers-lite、web-design-guidelines 等）。
 
 开始执行 V1.1 迭代开发，请稍候..."
         
         # 检查并准备开发环境
-        log "📋 步骤 2/5: 准备开发环境..."
+        log "📋 步骤 3/6: 准备开发环境..."
         prepare_dev_env "$name" "$git_url"
         
         # 触发开发（通过子代理）
-        log "📋 步骤 3/5: 触发开发子代理..."
+        log "📋 步骤 4/6: 触发开发子代理..."
         trigger_development "$name" "$version"
         
         # 执行自动开发（如果配置了自动开发）
-        log "📋 步骤 4/5: 执行自动开发..."
+        log "📋 步骤 5/6: 执行自动开发..."
         auto_develop "$name" "$git_url"
         
         # 记录开发开始时间
@@ -796,6 +809,16 @@ trigger_test_engineer() {
     
     log "  🧪 通知测试工程师: $task_name"
     
+    # 【环节3】自动推荐并安装最优 skill（测试工程师阶段）
+    log "  🔍 自动寻找并安装适合测试的 skill..."
+    if [ -f "$SKILL_DIR/lib/skill-recommender.sh" ]; then
+        local qa_skills=$(source "$SKILL_DIR/lib/skill-recommender.sh" && auto_recommend_and_install "qa" "$task_name" "测试阶段" 2>&1)
+        log "  ✅ 测试阶段 skill 推荐完成"
+        log "  推荐结果: $(echo "$qa_skills" | tail -1)"
+    else
+        log "  ⚠️ skill 推荐器未找到，跳过推荐"
+    fi
+    
     # 生成测试检查清单
     local test_checklist="测试检查清单：
 - [ ] 功能测试：所有功能正常运行
@@ -850,6 +873,9 @@ EOF
 
 📁 项目: $task_name
 🌐 测试地址: $deploy_url
+
+🔧 **已自动安装测试相关 skills:**
+系统已根据任务类型自动推荐并安装了最优的测试 skills。
 
 **请测试工程师进行测试：**
 
@@ -1049,6 +1075,16 @@ trigger_product_manager_analysis() {
     
     log "  📊 产品经理分析: $task_name"
     
+    # 【环节1】自动推荐并安装最优 skill（产品经理阶段）
+    log "  🔍 自动寻找并安装适合本任务的 skill..."
+    if [ -f "$SKILL_DIR/lib/skill-recommender.sh" ]; then
+        local recommended_skills=$(source "$SKILL_DIR/lib/skill-recommender.sh" && auto_recommend_and_install "pm" "$task_name" "产品分析阶段" 2>&1)
+        log "  ✅ 产品经理阶段 skill 推荐完成"
+        log "  推荐结果: $recommended_skills"
+    else
+        log "  ⚠️ skill 推荐器未找到，跳过推荐"
+    fi
+    
     # 创建竞品调研框架文件
     local research_file="$WORKSPACE/dev-projects/$(echo "$task_name" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')/docs/competitor-research.md"
     mkdir -p "$(dirname "$research_file")"
@@ -1196,6 +1232,9 @@ EOF
 
 📁 项目: $task_name
 🌐 V1 演示: $deploy_url
+
+🔧 **已自动安装产品分析相关 skills:**
+系统已根据任务类型自动推荐并安装了 superpowers-lite 等技能，辅助竞品调研和PRD编写。
 
 **请完成以下步骤：**
 
