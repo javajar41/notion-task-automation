@@ -154,6 +154,7 @@ check_tasks() {
     local pending=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "待确认迭代")] | length')
     local confirmed=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "确认迭代")] | length')
     local progress=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "进行中")] | length')
+    local pending_test=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "待测试")] | length')
     local testing=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "测试中")] | length')
     local acceptance=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "待验收")] | length')
     local fixing=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "修复中")] | length')
@@ -172,6 +173,7 @@ check_tasks() {
     log "  ⏸️ 待确认: $pending 个"
     log "  ✅ 已确认: $confirmed 个"
     log "  🔄 进行中: $progress 个"
+    log "  ⏳ 待测试: $pending_test 个"
     log "  🧪 测试中: $testing 个"
     log "  👤 待验收: $acceptance 个"
     log "  🔧 修复中: $fixing 个"
@@ -190,6 +192,7 @@ check_tasks() {
 ⏸️ 待确认:    $pending 个  
 ✅ 已确认:    $confirmed 个
 🔄 进行中:    $progress 个
+⏳ 待测试:    $pending_test 个
 🧪 测试中:    $testing 个
 👤 待验收:    $acceptance 个
 🔧 修复中:    $fixing 个
@@ -258,12 +261,23 @@ $confirmed_list
 🚀 系统将在下次检查时自动触发开发"
     fi
     
+    # 添加待测试的任务
+    if [ "$pending_test" -gt 0 ]; then
+        local pending_test_list=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "待测试")] | map("• " + .properties."项目名称".title[0].plain_text + " (" + (.properties."版本".select.name // "V1") + ")") | join("\n")')
+        report="$report
+
+⏳ **待测试 - 开发完成等待测试：**
+$pending_test_list
+
+🔬 测试工程师将开始测试"
+    fi
+    
     # 添加测试中的任务
     if [ "$testing" -gt 0 ]; then
         local testing_list=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "测试中")] | map("• " + .properties."项目名称".title[0].plain_text + " (" + (.properties."版本".select.name // "V1") + ")") | join("\n")')
         report="$report
 
-🧪 **测试中 - 等待测试工程师：**
+🧪 **测试中 - 测试工程师正在测试：**
 $testing_list
 
 🔬 测试完成后将自动生成测试报告"
@@ -325,7 +339,21 @@ execute_pending_tasks() {
     
     local confirmed_count=$(echo "$confirmed_tasks" | jq -r '.results | length')
     
-    # 2. 处理"测试中"的任务（阶段二：测试工程师测试）
+    # 2. 处理"待测试"的任务（开发完成，等待测试）
+    local pending_test_tasks=$(curl -s -X POST \
+      "https://api.notion.com/v1/databases/$NOTION_DATABASE_ID/query" \
+      -H "Authorization: Bearer $NOTION_TOKEN" \
+      -H "Notion-Version: 2022-06-28" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "filter": {
+          "property": "完成状态", "status": {"equals": "待测试"}
+        }
+      }')
+    
+    local pending_test_count=$(echo "$pending_test_tasks" | jq -r '.results | length')
+    
+    # 3. 处理"测试中"的任务（阶段二：测试工程师正在测试）
     local testing_tasks=$(curl -s -X POST \
       "https://api.notion.com/v1/databases/$NOTION_DATABASE_ID/query" \
       -H "Authorization: Bearer $NOTION_TOKEN" \
@@ -339,7 +367,7 @@ execute_pending_tasks() {
     
     local testing_count=$(echo "$testing_tasks" | jq -r '.results | length')
     
-    # 3. 处理"待验收"的任务（阶段三：产品验收）
+    # 4. 处理"待验收"的任务（阶段三：产品验收）
     local acceptance_tasks=$(curl -s -X POST \
       "https://api.notion.com/v1/databases/$NOTION_DATABASE_ID/query" \
       -H "Authorization: Bearer $NOTION_TOKEN" \
@@ -381,31 +409,53 @@ execute_pending_tasks() {
     
     local todo_count=$(echo "$todo_tasks" | jq -r '.results | length')
     
-    local total_count=$((confirmed_count + todo_count + testing_count + acceptance_count + fixing_count))
+    local total_count=$((confirmed_count + todo_count + pending_test_count + testing_count + acceptance_count + fixing_count))
     
     if [ "$total_count" -eq 0 ]; then
         info "没有需要执行的任务"
         return 0
     fi
     
-    log "发现 $total_count 个任务（确认迭代: $confirmed_count, 测试中: $testing_count, 待验收: $acceptance_count, 修复中: $fixing_count, 新任务: $todo_count）"
+    log "发现 $total_count 个任务（确认迭代: $confirmed_count, 待测试: $pending_test_count, 测试中: $testing_count, 待验收: $acceptance_count, 修复中: $fixing_count, 新任务: $todo_count）"
     log ""
     
-    # 处理"测试中"的任务：通知测试工程师（阶段二）
-    if [ "$testing_count" -gt 0 ]; then
+    # 处理"待测试"的任务：通知测试工程师开始测试
+    if [ "$pending_test_count" -gt 0 ]; then
         log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        log "🧪 测试中任务 - 等待测试工程师"
+        log "⏳ 待测试任务 - 通知测试工程师"
         log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         
-        echo "$testing_tasks" | jq -c '.results[]' | while read -r task; do
+        echo "$pending_test_tasks" | jq -c '.results[]' | while read -r task; do
             local name=$(echo "$task" | jq -r '.properties."项目名称".title[0].plain_text // "未命名"')
             local deploy_url=$(echo "$task" | jq -r '.properties."部署链接".url // ""')
             local page_id=$(echo "$task" | jq -r '.id')
             
-            log "🧪 待测试: $name"
+            log "⏳ 待测试: $name"
+            
+            # 更新状态为测试中并触发测试工程师
+            curl -s -X PATCH \
+              "https://api.notion.com/v1/pages/$page_id" \
+              -H "Authorization: Bearer $NOTION_TOKEN" \
+              -H "Notion-Version: 2022-06-28" \
+              -H "Content-Type: application/json" \
+              -d '{"properties": {"完成状态": {"status": {"name": "测试中"}}}}' > /dev/null
             
             # 触发测试工程师通知
             trigger_test_engineer "$name" "$deploy_url" "$page_id"
+            log "  ✅ 状态已更新为: 测试中"
+        done
+        log ""
+    fi
+    
+    # 处理"测试中"的任务：显示测试进度
+    if [ "$testing_count" -gt 0 ]; then
+        log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        log "🧪 测试中任务 - 测试工程师正在测试"
+        log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        
+        echo "$testing_tasks" | jq -c '.results[]' | while read -r task; do
+            local name=$(echo "$task" | jq -r '.properties."项目名称".title[0].plain_text // "未命名"')
+            log "🧪 测试中: $name - 等待测试完成"
         done
         log ""
     fi
@@ -690,68 +740,33 @@ $push_result
         
         log "  部署地址: $deploy_url"
         
-        # 获取当前版本号（需要重新查询任务信息）
+        # 获取当前版本号
         local current_task=$(curl -s -X GET \
           "https://api.notion.com/v1/pages/$PAGE_ID" \
           -H "Authorization: Bearer $NOTION_TOKEN" \
           -H "Notion-Version: 2022-06-28")
         local current_version=$(echo "$current_task" | jq -r '.properties."版本".select.name // "V1"')
         
-        # 判断版本：V1 → 待确认迭代，V1.1+ → 测试中
-        if [[ "$current_version" == "V1" ]]; then
-            # V1 完成，进入待确认迭代状态
-            log "  当前版本 V1，更新状态为: 待确认迭代"
-            curl -s -X PATCH \
-              "https://api.notion.com/v1/pages/$PAGE_ID" \
-              -H "Authorization: Bearer $NOTION_TOKEN" \
-              -H "Notion-Version: 2022-06-28" \
-              -H "Content-Type: application/json" \
-              -d '{
-                "properties": {
-                  "完成状态": {"status": {"name": "待确认迭代"}},
-                  "部署链接": {"url": "'"$deploy_url"'"}
-                }
-              }' > /dev/null
-            
-            # 触发产品经理分析
-            log "  触发产品经理分析流程..."
-            trigger_product_manager_analysis "$task_name" "$deploy_url" "$PAGE_ID"
-            
-            # 发送成功通知
-            send_notification "✅ **V1 开发完成，等待迭代确认**
-
-📁 项目: $task_name
-✅ V1 状态: 已部署
-🌐 访问地址: $deploy_url
-
-⏸️ **下一步：产品经理分析**
-请体验 V1 版本并决定是否需要迭代：
-
-💡 **你的选项：**
-- 🚀 确认迭代 → 在 Notion 中将状态改为"确认迭代"，开发 V1.1
-- ✅ 结束项目 → V1 已完成，无需继续迭代"
-            
-        else
-            # V1.1+ 完成，进入测试阶段
-            log "  当前版本 $current_version，更新状态为: 测试中"
-            curl -s -X PATCH \
-              "https://api.notion.com/v1/pages/$PAGE_ID" \
-              -H "Authorization: Bearer $NOTION_TOKEN" \
-              -H "Notion-Version: 2022-06-28" \
-              -H "Content-Type: application/json" \
-              -d '{
-                "properties": {
-                  "完成状态": {"status": {"name": "测试中"}},
-                  "部署链接": {"url": "'"$deploy_url"'"}
-                }
-              }' > /dev/null
-            
-            # 触发测试工程师测试
-            log "  触发测试工程师测试流程..."
-            trigger_test_engineer "$task_name" "$deploy_url" "$PAGE_ID"
-            
-            # 发送成功通知
-            send_notification "✅ **$current_version 开发完成，进入测试阶段**
+        # 所有版本开发完成后都进入"待测试"状态
+        log "  当前版本 $current_version，更新状态为: 待测试"
+        curl -s -X PATCH \
+          "https://api.notion.com/v1/pages/$PAGE_ID" \
+          -H "Authorization: Bearer $NOTION_TOKEN" \
+          -H "Notion-Version: 2022-06-28" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "properties": {
+              "完成状态": {"status": {"name": "待测试"}},
+              "部署链接": {"url": "'"$deploy_url"'"}
+            }
+          }' > /dev/null
+        
+        # 触发测试工程师测试
+        log "  触发测试工程师测试流程..."
+        trigger_test_engineer "$task_name" "$deploy_url" "$PAGE_ID"
+        
+        # 发送成功通知
+        send_notification "✅ **$current_version 开发完成，进入待测试**
 
 📁 项目: $task_name
 📌 版本: $current_version
@@ -763,10 +778,9 @@ $push_result
 
 💡 **测试完成后：**
 - ✅ 测试通过 → 状态改为"待验收"
-- ❌ 发现Bug → 状态改为"修复中"
+- ❌ 发现Bug → 状态改为"修复中"，自动转给开发修复
 
 📄 测试报告将自动生成。"
-        fi
         
         return 0
     fi
@@ -981,7 +995,7 @@ trigger_product_acceptance() {
     
     log "  👤 触发产品验收: $task_name"
     
-    # 更新状态为"待验收"
+    # 更新状态为"待确认迭代"（验收完成后等待用户确认是否迭代）
     curl -s -X PATCH \
       "https://api.notion.com/v1/pages/$page_id" \
       -H "Authorization: Bearer $NOTION_TOKEN" \
@@ -989,7 +1003,7 @@ trigger_product_acceptance() {
       -H "Content-Type: application/json" \
       -d '{
         "properties": {
-          "完成状态": {"status": {"name": "待验收"}}
+          "完成状态": {"status": {"name": "待确认迭代"}}
         }
       }' > /dev/null
     
@@ -1003,21 +1017,26 @@ trigger_product_acceptance() {
 - [ ] 文档完整：README和注释完善"
     
     # 发送验收通知
-    send_notification "👤 **产品验收待执行**
+    send_notification "👤 **产品验收完成，等待迭代确认**
 
 📁 项目: $task_name
 🌐 演示地址: $deploy_url
 
-**请产品经理进行最终验收：**
+**请产品经理进行验收并规划下一版本：**
 
 $acceptance_checklist
 
-✅ 验收通过 → 状态改为"已完成"
-❌ 需要调整 → 状态改为"确认迭代"并说明需求
+📝 **下一步：规划迭代**
+1. 验收完成后，补充迭代PRD到项目文档
+2. 评估是否需要继续迭代
 
-⏱️ 预计验收时间: 20分钟"
+💡 **你的决策：**
+- 🔄 需要迭代 → 将状态改为"确认迭代"，开始下一版本开发
+- ✅ 已完成 → 将状态改为"已完成"，停止任务
+
+⏱️ 预计验收+规划时间: 30分钟"
     
-    log "  ✅ 产品验收通知已发送"
+    log "  ✅ 产品验收通知已发送，状态变为: 待确认迭代"
 }
 
 # ============================================
