@@ -1361,6 +1361,9 @@ EOF
     log "  📄 竞品调研模板: $research_file"
     log "  📄 V1.1 PRD模板: $prd_file"
     
+    # 【修复】更新Notion的PRD链接
+    update_notion_prd_url "$page_id" "$task_name"
+    
     # 发送通知给产品经理（用户）
     send_notification "📊 **产品经理分析提醒**
 
