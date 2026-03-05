@@ -797,8 +797,8 @@ $push_result
           -H "Notion-Version: 2022-06-28")
         local current_version=$(echo "$current_task" | jq -r '.properties."版本".select.name // "V1"')
         
-        # 所有版本开发完成后都进入"测试中"状态（测试工程师先写测试用例，再测试）
-        log "  当前版本 $current_version，更新状态为: 测试中"
+        # 所有版本开发完成后更新部署链接（状态保持"进行中"，等待开发完成后手动更新）
+        log "  当前版本 $current_version，更新部署链接..."
         curl -s -X PATCH \
           "https://api.notion.com/v1/pages/$PAGE_ID" \
           -H "Authorization: Bearer $NOTION_TOKEN" \
@@ -806,10 +806,10 @@ $push_result
           -H "Content-Type: application/json" \
           -d '{
             "properties": {
-              "完成状态": {"status": {"name": "测试中"}},
               "部署链接": {"url": "'"$deploy_url"'"}
             }
           }' > /dev/null
+        log "  ✅ 部署链接已更新: $deploy_url"
         
         # 触发测试工程师（先写测试用例，再测试）
         log "  触发测试工程师测试流程..."
