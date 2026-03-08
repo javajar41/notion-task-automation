@@ -17,27 +17,35 @@ fi
 
 SKILL_DIR="$WORKSPACE/skills"
 
-declare -A SKILL_RECOMMENDATIONS
-
 # ============================================================
-# Skill 推荐数据库
+# Skill 推荐数据库（使用函数替代关联数组，兼容 macOS bash）
 # ============================================================
 
-# 产品经理阶段推荐的 skills
-SKILL_RECOMMENDATIONS[pm_analysis]="superpowers-lite"
-SKILL_RECOMMENDATIONS[pm_research]="web-search,web-fetch"
-SKILL_RECOMMENDATIONS[pm_prd]="superpowers-lite"
-
-# 研发工程师阶段推荐的 skills
-SKILL_RECOMMENDATIONS[dev_web]="superpowers-lite,web-design-guidelines,performance,accessibility-a11y"
-SKILL_RECOMMENDATIONS[dev_tool]="superpowers-lite"
-SKILL_RECOMMENDATIONS[dev_api]="superpowers-lite"
-SKILL_RECOMMENDATIONS[dev_script]="superpowers-lite"
-
-# 测试工程师阶段推荐的 skills
-SKILL_RECOMMENDATIONS[qa_test]="superpowers-lite"
-SKILL_RECOMMENDATIONS[qa_auto]="superpowers-lite"
-SKILL_RECOMMENDATIONS[qa_checklist]="superpowers-lite"
+get_skill_recommendation() {
+    local key="$1"
+    case "$key" in
+        # 产品经理阶段
+        "pm_analysis") echo "superpowers-lite" ;;
+        "pm_research") echo "web-search,web-fetch" ;;
+        "pm_prd") echo "superpowers-lite" ;;
+        "pm_general") echo "superpowers-lite" ;;
+        
+        # 研发工程师阶段
+        "dev_web") echo "superpowers-lite,web-design-guidelines,performance,accessibility-a11y" ;;
+        "dev_tool") echo "superpowers-lite" ;;
+        "dev_api") echo "superpowers-lite" ;;
+        "dev_script") echo "superpowers-lite" ;;
+        "dev_general") echo "superpowers-lite" ;;
+        
+        # 测试工程师阶段
+        "qa_test") echo "superpowers-lite" ;;
+        "qa_auto") echo "superpowers-lite" ;;
+        "qa_checklist") echo "superpowers-lite" ;;
+        "qa_general") echo "superpowers-lite" ;;
+        
+        *) echo "" ;;
+    esac
+}
 
 # ============================================================
 # 函数：分析任务类型
@@ -67,7 +75,12 @@ recommend_skills() {
     local task_name="$3"
     
     local key="${phase}_${task_type}"
-    local recommendations="${SKILL_RECOMMENDATIONS[$key]:-${SKILL_RECOMMENDATIONS[${phase}_general]}}"
+    local recommendations=$(get_skill_recommendation "$key")
+    
+    # 如果没有特定推荐，使用通用推荐
+    if [ -z "$recommendations" ]; then
+        recommendations=$(get_skill_recommendation "${phase}_general")
+    fi
     
     echo "$recommendations"
 }

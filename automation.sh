@@ -43,6 +43,32 @@ if [ -f "$ENV_FILE" ] && [ "$ENV_FILE" != "$SCRIPT_DIR/config/.env" ]; then
     set +a
 fi
 
+
+# ============================================
+# 跨平台工具函数
+# ============================================
+
+# 获取 ISO 8601 格式时间（兼容 Linux/macOS）
+get_iso_timestamp() {
+    if date --version >/dev/null 2>&1; then
+        date -Iseconds  # GNU date (Linux)
+    else
+        date +%Y-%m-%dT%H:%M:%S%z  # BSD date (macOS)
+    fi
+}
+
+# 获取未来时间（兼容 Linux/macOS）
+get_future_time() {
+    local offset="$1"
+    local format="${2:-%H:%M}"
+    if date --version >/dev/null 2>&1; then
+        date -d "$offset" "+$format"
+    else
+        local minutes=$(echo "$offset" | grep -oE '[0-9]+')
+        date -v "+${minutes}M" "+$format"
+    fi
+}
+
 # 颜色输出
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -332,10 +358,18 @@ $fixing_list
 🐛 修复完成后请更新状态"
     fi
     
+    # 跨平台时间计算
+    local next_check_time
+    if date --version >/dev/null 2>&1; then
+        next_check_time=$(date -d '+30 minutes' '+%H:%M')
+    else
+        next_check_time=$(date -v+30M '+%H:%M')
+    fi
+    
     report="$report
 
 ---
-⏰ 下次检查: $(date -d '+30 minutes' '+%H:%M') (每30分钟)
+⏰ 下次检查: $next_check_time (每30分钟)
 📁 完整日志: \`tail -f /tmp/notion-skill.log\`"
     
     send_notification "$report"
@@ -724,7 +758,7 @@ trigger_development() {
 {
   "task_name": "$task_name",
   "version": "$version",
-  "started_at": "$(date -Iseconds)",
+  "started_at": "$(get_iso_timestamp)",
   "status": "pending",
   "steps": [
     "环境准备",
@@ -1116,7 +1150,7 @@ create_bug_fix_task() {
 {
   "original_task": "$task_name",
   "original_page_id": "$original_page_id",
-  "created_at": "$(date -Iseconds)",
+  "created_at": "$(get_iso_timestamp)",
   "bugs": "$(echo "$bugs" | sed 's/"/\\"/g')",
   "status": "pending",
   "priority": "high",
@@ -1368,8 +1402,12 @@ PRDEOF
 PRDEOF
     fi
     
-    # 替换模板变量
-    sed -i "s/\$task_name/$task_name/g" "$research_file" "$prd_file"
+    # 替换模板变量（跨平台兼容）
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        sed -i '' "s/\$task_name/$task_name/g" "$research_file" "$prd_file"
+    else
+        sed -i "s/\$task_name/$task_name/g" "$research_file" "$prd_file"
+    fi
     
     # 创建分析任务文件
     local analysis_file="$WORKSPACE/dev-projects/$(echo "$task_name" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')/.pm-analysis.json"
@@ -1378,7 +1416,7 @@ PRDEOF
   "task_name": "$task_name",
   "deploy_url": "$deploy_url",
   "page_id": "$page_id",
-  "analysis_time": "$(date -Iseconds)",
+  "analysis_time": "$(get_iso_timestamp)",
   "v1_status": "completed",
   "research_file": "$research_file",
   "prd_file": "$prd_file",
@@ -1751,7 +1789,7 @@ pause_task() {
         
         # 添加到现有列表
         local temp=$(mktemp)
-        jq ".paused_tasks += [{\"name\": \"$task_name\", \"reason\": \"用户暂不迭代\", \"paused_at\": \"$(date -Iseconds)\", \"resume_hint\": \"当用户需要继续迭代时手动激活\"}]" "$config_file" > "$temp" && mv "$temp" "$config_file"
+        jq ".paused_tasks += [{\"name\": \"$task_name\", \"reason\": \"用户暂不迭代\", \"paused_at\": \"$(get_iso_timestamp)\", \"resume_hint\": \"当用户需要继续迭代时手动激活\"}]" "$config_file" > "$temp" && mv "$temp" "$config_file"
     else
         # 创建新列表
         cat > "$config_file" << EOF
@@ -1760,7 +1798,7 @@ pause_task() {
     {
       "name": "$task_name",
       "reason": "用户暂不迭代",
-      "paused_at": "$(date -Iseconds)",
+      "paused_at": "$(get_iso_timestamp)",
       "resume_hint": "当用户需要继续迭代时手动激活"
     }
   ]
