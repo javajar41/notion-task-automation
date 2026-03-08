@@ -1,9 +1,20 @@
 #!/bin/bash
 # skill-recommender.sh - Skill 自动推荐和安装系统
 # 根据任务类型、阶段自动推荐并安装最优 skill
+# 修复版本：支持跨平台路径检测
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DB="$1"
-WORKSPACE="${WORKSPACE:-/home/shiyongwang/.openclaw/workspace}"
+
+# 动态检测 WORKSPACE
+if [ -n "$OPENCLAW_WORKSPACE" ]; then
+    WORKSPACE="$OPENCLAW_WORKSPACE"
+elif [ -n "$HOME" ] && [ -d "$HOME/.openclaw/workspace" ]; then
+    WORKSPACE="$HOME/.openclaw/workspace"
+else
+    WORKSPACE="$(cd "$SCRIPT_DIR/../.." && pwd)"
+fi
+
 SKILL_DIR="$WORKSPACE/skills"
 
 declare -A SKILL_RECOMMENDATIONS
@@ -106,8 +117,8 @@ install_skill() {
             if [ -d "$WORKSPACE/.agents/skills/web-design-guidelines" ]; then
                 cp -r "$WORKSPACE/.agents/skills/web-design-guidelines" "$SKILL_DIR/"
                 echo "✅ web-design-guidelines 安装完成"
-            elif [ -d "/home/shiyongwang/.agents/skills/web-design-guidelines" ]; then
-                cp -r "/home/shiyongwang/.agents/skills/web-design-guidelines" "$SKILL_DIR/"
+            elif [ -d "$HOME/.agents/skills/web-design-guidelines" ]; then
+                cp -r "$HOME/.agents/skills/web-design-guidelines" "$SKILL_DIR/"
                 echo "✅ web-design-guidelines 安装完成"
             else
                 echo "⚠️ web-design-guidelines 源文件不存在"
@@ -117,8 +128,8 @@ install_skill() {
             if [ -d "$WORKSPACE/.agents/skills/performance" ]; then
                 cp -r "$WORKSPACE/.agents/skills/performance" "$SKILL_DIR/"
                 echo "✅ performance 安装完成"
-            elif [ -d "/home/shiyongwang/.agents/skills/performance" ]; then
-                cp -r "/home/shiyongwang/.agents/skills/performance" "$SKILL_DIR/"
+            elif [ -d "$HOME/.agents/skills/performance" ]; then
+                cp -r "$HOME/.agents/skills/performance" "$SKILL_DIR/"
                 echo "✅ performance 安装完成"
             else
                 echo "⚠️ performance 源文件不存在"
@@ -128,8 +139,8 @@ install_skill() {
             if [ -d "$WORKSPACE/.agents/skills/accessibility-a11y" ]; then
                 cp -r "$WORKSPACE/.agents/skills/accessibility-a11y" "$SKILL_DIR/"
                 echo "✅ accessibility-a11y 安装完成"
-            elif [ -d "/home/shiyongwang/.agents/skills/accessibility-a11y" ]; then
-                cp -r "/home/shiyongwang/.agents/skills/accessibility-a11y" "$SKILL_DIR/"
+            elif [ -d "$HOME/.agents/skills/accessibility-a11y" ]; then
+                cp -r "$HOME/.agents/skills/accessibility-a11y" "$SKILL_DIR/"
                 echo "✅ accessibility-a11y 安装完成"
             else
                 echo "⚠️ accessibility-a11y 源文件不存在"

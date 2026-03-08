@@ -1,17 +1,43 @@
 #!/bin/bash
-# Notion Task Automation Skill - 完整版 v2.0
+# Notion Task Automation Skill - 完整版 v2.5.1
 # 功能：任务检查、产品经理分析、自动开发、自动部署、进度追踪
 
 set -e
 
-WORKSPACE="/home/shiyongwang/.openclaw/workspace"
-ENV_FILE="$WORKSPACE/.env"
-SKILL_DIR="$WORKSPACE/skills/notion-task-automation"
-LOG_FILE="/tmp/notion-skill.log"
+# ============================================
+# 动态路径检测（支持跨平台）
+# ============================================
+
+# 方式1: 从环境变量读取（优先级最高）
+# 方式2: 从配置文件读取
+# 方式3: 自动检测
+
+# 首先尝试加载同目录下的 config/.env
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/config/.env" ]; then
+    set -a
+    source "$SCRIPT_DIR/config/.env"
+    set +a
+fi
+
+# 设置 WORKSPACE（可通过 OPENCLAW_WORKSPACE 环境变量覆盖）
+if [ -n "$OPENCLAW_WORKSPACE" ]; then
+    WORKSPACE="$OPENCLAW_WORKSPACE"
+elif [ -n "$HOME" ] && [ -d "$HOME/.openclaw/workspace" ]; then
+    WORKSPACE="$HOME/.openclaw/workspace"
+else
+    # 尝试自动检测（从脚本位置推断）
+    WORKSPACE="$(cd "$SCRIPT_DIR/../.." && pwd)"
+fi
+
+# 设置其他路径
+ENV_FILE="${OPENCLAW_ENV_FILE:-$WORKSPACE/.env}"
+SKILL_DIR="$SCRIPT_DIR"
+LOG_FILE="${OPENCLAW_LOG_FILE:-/tmp/notion-skill.log}"
 STATE_FILE="$SKILL_DIR/state.json"
 
-# 加载环境变量
-if [ -f "$ENV_FILE" ]; then
+# 如果存在全局环境变量文件，也加载它
+if [ -f "$ENV_FILE" ] && [ "$ENV_FILE" != "$SCRIPT_DIR/config/.env" ]; then
     set -a
     source "$ENV_FILE"
     set +a
@@ -133,38 +159,46 @@ load_state() {
 }
 
 # ============================================
-# 功能 1: 检查所有任务（增强版）
+# 【优化】加载API缓存系统
+# ============================================
+if [ -f "$SKILL_DIR/lib/api-cache.sh" ]; then
+    source "$SKILL_DIR/lib/api-cache.sh"
+fi
+
+# ============================================
+# 功能 1: 检查所有任务（API优化版）
 # ============================================
 check_tasks() {
     log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     log "🔍 开始检查 Notion 任务"
     log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     
-    # 检查是否有最近变更的任务（状态变更立即响应）
-    if [ -f "$SKILL_DIR/lib/notion-change-detector.sh" ]; then
-        log "📡 检查最近状态变更..."
-        source "$SKILL_DIR/lib/notion-change-detector.sh" 2>/dev/null
-        log ""
+    # 【优化】使用缓存系统查询任务，减少API调用
+    local all_data
+    if [ -f "$SKILL_DIR/lib/api-cache.sh" ]; then
+        log "📦 使用API缓存系统（缓存有效期5分钟）"
+        all_data=$(cached_query_all_tasks) || true
+    else
+        # 回退到直接API调用
+        all_data=$(curl -s -X POST \
+          "https://api.notion.com/v1/databases/$NOTION_DATABASE_ID/query" \
+          -H "Authorization: Bearer $NOTION_TOKEN" \
+          -H "Notion-Version: 2022-06-28" \
+          -H "Content-Type: application/json" \
+          -d '{}')
     fi
     
-    local all_data=$(curl -s -X POST \
-      "https://api.notion.com/v1/databases/$NOTION_DATABASE_ID/query" \
-      -H "Authorization: Bearer $NOTION_TOKEN" \
-      -H "Notion-Version: 2022-06-28" \
-      -H "Content-Type: application/json" \
-      -d '{}')
+    local total=$(echo "$all_data" | jq -r '.results | length // 0')
     
-    local total=$(echo "$all_data" | jq -r '.results | length')
-    
-    # 按状态统计
-    local todo=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "未开始")] | length')
-    local pending=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "待确认迭代")] | length')
-    local confirmed=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "确认迭代")] | length')
-    local progress=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "进行中")] | length')
-    local testing=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "测试中")] | length')
-    local acceptance=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "待验收")] | length')
-    local fixing=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "修复中")] | length')
-    local done=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "已完成")] | length')
+    # 按状态统计（使用 // 0 确保空值时默认为0）
+    local todo=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "未开始")] | length // 0')
+    local pending=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "待确认迭代")] | length // 0')
+    local confirmed=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "确认迭代")] | length // 0')
+    local progress=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "进行中")] | length // 0')
+    local testing=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "测试中")] | length // 0')
+    local acceptance=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "待验收")] | length // 0')
+    local fixing=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "修复中")] | length // 0')
+    local done=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "已完成")] | length // 0')
     
     # 保存统计数据
     save_state "last_check_time" "$(date '+%Y-%m-%d %H:%M:%S')"
@@ -174,15 +208,15 @@ check_tasks() {
     log ""
     log "📊 任务统计"
     log "─────────────────────────────────"
-    info "  总计:     $total 个任务"
-    log "  🚀 新任务: $todo 个"
-    log "  ⏸️ 待确认: $pending 个"
-    log "  ✅ 已确认: $confirmed 个"
-    log "  🔄 进行中: $progress 个"
-    log "  🧪 测试中: $testing 个"
-    log "  👤 待验收: $acceptance 个"
-    log "  🔧 修复中: $fixing 个"
-    log "  🎉 已完成: $done 个"
+    info "  总计:     ${total:-0} 个任务"
+    log "  🚀 新任务: ${todo:-0} 个"
+    log "  ⏸️ 待确认: ${pending:-0} 个"
+    log "  ✅ 已确认: ${confirmed:-0} 个"
+    log "  🔄 进行中: ${progress:-0} 个"
+    log "  🧪 测试中: ${testing:-0} 个"
+    log "  👤 待验收: ${acceptance:-0} 个"
+    log "  🔧 修复中: ${fixing:-0} 个"
+    log "  🎉 已完成: ${done:-0} 个"
     log "─────────────────────────────────"
     log ""
     
@@ -204,7 +238,7 @@ check_tasks() {
 \`\`\`"
 
     # 添加进行中的任务
-    if [ "$progress" -gt 0 ]; then
+    if [ "${progress:-0}" -gt 0 ]; then
         local progress_list=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "进行中")] | map("• " + .properties."项目名称".title[0].plain_text + " (" + (.properties."版本".select.name // "V1") + ")") | join("\n")')
         report="$report
 
@@ -215,7 +249,7 @@ $progress_list
     fi
     
     # 添加待确认的任务（排除已暂停的）
-    if [ "$pending" -gt 0 ]; then
+    if [ "${pending:-0}" -gt 0 ]; then
         # 加载暂停的任务列表
         local paused_tasks=""
         if [ -f "$SKILL_DIR/config/paused-tasks.json" ]; then
@@ -255,7 +289,7 @@ $progress_list
     fi
     
     # 添加已确认的任务（即将执行）
-    if [ "$confirmed" -gt 0 ]; then
+    if [ "${confirmed:-0}" -gt 0 ]; then
         local confirmed_list=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "确认迭代")] | map("• " + .properties."项目名称".title[0].plain_text + " (" + (.properties."版本".select.name // "V1.1") + ")") | join("\n")')
         report="$report
 
@@ -266,7 +300,7 @@ $confirmed_list
     fi
     
     # 添加测试中的任务
-    if [ "$testing" -gt 0 ]; then
+    if [ "${testing:-0}" -gt 0 ]; then
         local testing_list=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "测试中")] | map("• " + .properties."项目名称".title[0].plain_text + " (" + (.properties."版本".select.name // "V1") + ")") | join("\n")')
         report="$report
 
@@ -277,7 +311,7 @@ $testing_list
     fi
     
     # 添加待验收的任务
-    if [ "$acceptance" -gt 0 ]; then
+    if [ "${acceptance:-0}" -gt 0 ]; then
         local acceptance_list=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "待验收")] | map("• " + .properties."项目名称".title[0].plain_text + " (" + (.properties."版本".select.name // "V1") + ")") | join("\n")')
         report="$report
 
@@ -288,7 +322,7 @@ $acceptance_list
     fi
     
     # 添加修复中的任务
-    if [ "$fixing" -gt 0 ]; then
+    if [ "${fixing:-0}" -gt 0 ]; then
         local fixing_list=$(echo "$all_data" | jq -r '[.results[] | select(.properties."完成状态".status.name == "修复中")] | map("• " + .properties."项目名称".title[0].plain_text) | join("\n")')
         report="$report
 
@@ -1550,10 +1584,30 @@ send_notification() {
     
     export OPENCLAW_WORKSPACE="$WORKSPACE"
     
-    /usr/bin/node /home/shiyongwang/.npm-global/bin/openclaw message send \
-      --channel feishu \
-      --target "user:ou_33e8141e4496f0a674219423723997bf" \
-      --message "$message" 2>&1 || warn "通知发送失败"
+    # 检测 openclaw 命令位置（支持不同安装方式）
+    local openclaw_cmd="openclaw"
+    if ! command -v openclaw &> /dev/null; then
+        # 尝试常见安装路径
+        if [ -x "$HOME/.npm-global/bin/openclaw" ]; then
+            openclaw_cmd="$HOME/.npm-global/bin/openclaw"
+        elif [ -x "/usr/local/bin/openclaw" ]; then
+            openclaw_cmd="/usr/local/bin/openclaw"
+        elif [ -x "$WORKSPACE/../node_modules/.bin/openclaw" ]; then
+            openclaw_cmd="$WORKSPACE/../node_modules/.bin/openclaw"
+        fi
+    fi
+    
+    # 读取通知配置（从环境变量或配置文件）
+    local notify_channel="${NOTIFY_CHANNEL:-feishu}"
+    local notify_target="${NOTIFY_TARGET:-user:ou_33e8141e4496f0a674219423723997bf}"
+    
+    # 如果配置了通知才发送
+    if [ -n "$notify_target" ]; then
+        $openclaw_cmd message send \
+          --channel "$notify_channel" \
+          --target "$notify_target" \
+          --message "$message" 2>&1 || warn "通知发送失败"
+    fi
 }
 
 # ============================================
